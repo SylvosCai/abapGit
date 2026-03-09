@@ -99,8 +99,9 @@ CLASS zcl_abapgit_repo DEFINITION
         zcx_abapgit_exception .
     METHODS deserialize_objects
       IMPORTING
-        !is_checks TYPE zif_abapgit_definitions=>ty_deserialize_checks
-        !ii_log    TYPE REF TO zif_abapgit_log
+        !is_checks     TYPE zif_abapgit_definitions=>ty_deserialize_checks
+        !ii_log        TYPE REF TO zif_abapgit_log
+        !ii_obj_filter TYPE REF TO zif_abapgit_object_filter OPTIONAL
       CHANGING
         !ct_files  TYPE zif_abapgit_git_definitions=>ty_file_signatures_tt
       RAISING
@@ -256,9 +257,10 @@ CLASS zcl_abapgit_repo IMPLEMENTATION.
 
     TRY.
         lt_updated_files = zcl_abapgit_objects=>deserialize(
-          ii_repo   = me
-          is_checks = is_checks
-          ii_log    = ii_log ).
+          ii_repo       = me
+          is_checks     = is_checks
+          ii_log        = ii_log
+          ii_obj_filter = ii_obj_filter ).
       CATCH zcx_abapgit_exception INTO lx_error.
         " Ensure to reset default transport request task
         zcl_abapgit_factory=>get_default_transport( )->reset( ).
@@ -542,8 +544,9 @@ CLASS zcl_abapgit_repo IMPLEMENTATION.
 
     deserialize_objects(
       EXPORTING
-        is_checks = is_checks
-        ii_log    = ii_log
+        is_checks     = is_checks
+        ii_log        = ii_log
+        ii_obj_filter = ii_obj_filter
       CHANGING
         ct_files  = lt_updated_files ).
 

@@ -230,8 +230,11 @@ CLASS zcl_abapgit_objects_check IMPLEMENTATION.
     DATA: lt_results TYPE zif_abapgit_definitions=>ty_results_tt,
           li_package TYPE REF TO zif_abapgit_sap_package.
 
-    " get unfiltered status to evaluate properly which warnings are required
-    lt_results = zcl_abapgit_repo_status=>calculate( ii_repo ).
+    " When a filter is supplied only the requested objects are evaluated;
+    " without a filter the full repo status is calculated (original behavior)
+    lt_results = zcl_abapgit_repo_status=>calculate(
+      ii_repo       = ii_repo
+      ii_obj_filter = ii_obj_filter ).
 
     check_multiple_files( lt_results ).
 

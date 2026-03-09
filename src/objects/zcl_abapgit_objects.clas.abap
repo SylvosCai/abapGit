@@ -17,6 +17,7 @@ CLASS zcl_abapgit_objects DEFINITION
         !ii_repo                 TYPE REF TO zif_abapgit_repo
         !is_checks               TYPE zif_abapgit_definitions=>ty_deserialize_checks
         !ii_log                  TYPE REF TO zif_abapgit_log
+        !ii_obj_filter           TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RETURNING
         VALUE(rt_accessed_files) TYPE zif_abapgit_git_definitions=>ty_file_signatures_tt
       RAISING
@@ -626,8 +627,9 @@ CLASS zcl_abapgit_objects IMPLEMENTATION.
     lt_remote = ii_repo->get_files_remote( iv_ignore_files = abap_true ).
 
     lt_results = zcl_abapgit_file_deserialize=>get_results(
-      ii_repo = ii_repo
-      ii_log = ii_log ).
+      ii_repo       = ii_repo
+      ii_log        = ii_log
+      ii_obj_filter = ii_obj_filter ).
 
     IF lt_results IS INITIAL.
       RETURN.
