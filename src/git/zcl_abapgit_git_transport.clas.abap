@@ -50,6 +50,14 @@ CLASS zcl_abapgit_git_transport DEFINITION
         VALUE(ri_branch_list) TYPE REF TO zif_abapgit_git_branch_list
       RAISING
         zcx_abapgit_exception .
+    CLASS-METHODS upload_pack_blobs
+      IMPORTING
+        !iv_url           TYPE string
+        !it_hashes        TYPE zif_abapgit_git_definitions=>ty_sha1_tt
+      RETURNING
+        VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
+      RAISING
+        zcx_abapgit_exception .
 
   PROTECTED SECTION.
   PRIVATE SECTION.
@@ -108,14 +116,6 @@ CLASS zcl_abapgit_git_transport DEFINITION
         !iv_deepen_level  TYPE i DEFAULT 0
         !it_hashes        TYPE zif_abapgit_git_definitions=>ty_sha1_tt
         !iv_filter        TYPE string OPTIONAL
-      RETURNING
-        VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
-      RAISING
-        zcx_abapgit_exception .
-    CLASS-METHODS upload_pack_blobs
-      IMPORTING
-        !iv_url           TYPE string
-        !it_hashes        TYPE zif_abapgit_git_definitions=>ty_sha1_tt
       RETURNING
         VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
       RAISING
