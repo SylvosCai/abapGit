@@ -25,6 +25,7 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         !iv_branch_name  TYPE string
         !iv_deepen_level TYPE i DEFAULT 1
         !iv_filter       TYPE string OPTIONAL
+        !it_wanted_files TYPE string_table OPTIONAL
       RETURNING
         VALUE(rs_result) TYPE ty_pull_result
       RAISING
@@ -35,6 +36,7 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         !iv_commit_hash  TYPE zif_abapgit_git_definitions=>ty_sha1
         !iv_deepen_level TYPE i DEFAULT 1
         !iv_filter       TYPE string OPTIONAL
+        !it_wanted_files TYPE string_table OPTIONAL
       RETURNING
         VALUE(rs_result) TYPE ty_pull_result
       RAISING
@@ -121,10 +123,11 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         VALUE(rt_folders) TYPE ty_folders_tt .
     CLASS-METHODS pull
       IMPORTING
-        !iv_commit      TYPE zif_abapgit_git_definitions=>ty_sha1
-        !it_objects     TYPE zif_abapgit_definitions=>ty_objects_tt
-        !iv_url         TYPE string OPTIONAL
-        !iv_filter      TYPE string OPTIONAL
+        !iv_commit        TYPE zif_abapgit_git_definitions=>ty_sha1
+        !it_objects       TYPE zif_abapgit_definitions=>ty_objects_tt
+        !iv_url           TYPE string OPTIONAL
+        !iv_filter        TYPE string OPTIONAL
+        !it_wanted_files  TYPE string_table OPTIONAL
       RETURNING
         VALUE(rt_files) TYPE zif_abapgit_git_definitions=>ty_files_tt
       RAISING
@@ -510,12 +513,14 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
   METHOD pull.
 
-    DATA: ls_object   TYPE zif_abapgit_definitions=>ty_object,
-          ls_commit   TYPE zcl_abapgit_git_pack=>ty_commit,
-          lt_stubs    TYPE zif_abapgit_git_definitions=>ty_files_tt,
-          lt_blob_hashes TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
+    DATA: ls_object       TYPE zif_abapgit_definitions=>ty_object,
+          ls_commit       TYPE zcl_abapgit_git_pack=>ty_commit,
+          lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_blob_hashes  TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
           lt_blob_objects TYPE zif_abapgit_definitions=>ty_objects_tt,
-          ls_obj      TYPE zif_abapgit_definitions=>ty_object.
+          ls_obj          TYPE zif_abapgit_definitions=>ty_object.
+
+    DATA lt_wanted TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
 
     FIELD-SYMBOLS: <ls_stub> LIKE LINE OF lt_stubs.
 
@@ -546,6 +551,16 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
                                iv_path    = '/'
                                iv_root    = abap_true
                    CHANGING   ct_stubs   = lt_stubs ).
+
+    " Filter stubs to only the requested files before Phase 2
+    IF it_wanted_files IS NOT INITIAL.
+      lt_wanted = it_wanted_files.
+      LOOP AT lt_stubs ASSIGNING <ls_stub>.
+        IF NOT line_exists( lt_wanted[ table_line = to_lower( <ls_stub>-filename ) ] ).
+          DELETE lt_stubs.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
 
     " Phase 2: fetch only the needed blobs by SHA
     LOOP AT lt_stubs ASSIGNING <ls_stub>.
@@ -584,10 +599,11 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
         ev_branch          = rs_result-commit
         ev_filter_applied  = lv_filter_applied ).
 
-    rs_result-files = pull( iv_commit  = rs_result-commit
-                            it_objects = rs_result-objects
-                            iv_url     = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
-                            iv_filter  = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter ) ).
+    rs_result-files = pull( iv_commit       = rs_result-commit
+                            it_objects      = rs_result-objects
+                            iv_url          = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
+                            iv_filter       = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter )
+                            it_wanted_files = it_wanted_files ).
 
   ENDMETHOD.
 
@@ -607,10 +623,11 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
         ev_commit          = rs_result-commit
         ev_filter_applied  = lv_filter_applied ).
 
-    rs_result-files = pull( iv_commit  = rs_result-commit
-                            it_objects = rs_result-objects
-                            iv_url     = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
-                            iv_filter  = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter ) ).
+    rs_result-files = pull( iv_commit       = rs_result-commit
+                            it_objects      = rs_result-objects
+                            iv_url          = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
+                            iv_filter       = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter )
+                            it_wanted_files = it_wanted_files ).
 
   ENDMETHOD.
 
