@@ -26,6 +26,10 @@ CLASS ltcl_git_porcelain DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHO
       walk_for_blobs_subdir FOR TESTING
         RAISING zcx_abapgit_exception,
       pull_full_walk_no_filter FOR TESTING
+        RAISING zcx_abapgit_exception,
+      filter_stubs_keeps_match FOR TESTING
+        RAISING zcx_abapgit_exception,
+      filter_stubs_removes_no_match FOR TESTING
         RAISING zcx_abapgit_exception.
 
     METHODS build_tree_object
@@ -371,6 +375,68 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
       act = ls_file-data
       exp = lv_blob_data
       msg = 'Blob data must match original content' ).
+
+  ENDMETHOD.
+
+  METHOD filter_stubs_keeps_match.
+    " filter_stubs with a matching filename keeps the stub
+
+    DATA lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt.
+    DATA ls_stub         LIKE LINE OF lt_stubs.
+    DATA lt_wanted_files TYPE string_table.
+
+    ls_stub-filename = 'zcl_myclass.clas.abap'.
+    ls_stub-path     = '/'.
+    ls_stub-sha1     = '1111111111111111111111111111111111111111'.
+    APPEND ls_stub TO lt_stubs.
+
+    APPEND 'zcl_myclass.clas.abap' TO lt_wanted_files.
+
+    zcl_abapgit_git_porcelain=>filter_stubs(
+      EXPORTING it_wanted_files = lt_wanted_files
+      CHANGING  ct_stubs        = lt_stubs ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lines( lt_stubs )
+      exp = 1
+      msg = 'Matching stub must be kept' ).
+
+  ENDMETHOD.
+
+  METHOD filter_stubs_removes_no_match.
+    " filter_stubs removes non-matching stubs and is case-insensitive
+
+    DATA lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt.
+    DATA ls_stub         LIKE LINE OF lt_stubs.
+    DATA lt_wanted_files TYPE string_table.
+
+    " Stub 1: matches (uppercase in stub, lowercase in wanted list)
+    ls_stub-filename = 'ZCL_MYCLASS.clas.abap'.
+    ls_stub-path     = '/'.
+    ls_stub-sha1     = '1111111111111111111111111111111111111111'.
+    APPEND ls_stub TO lt_stubs.
+
+    " Stub 2: no match
+    ls_stub-filename = 'zcl_other.clas.abap'.
+    ls_stub-sha1     = '2222222222222222222222222222222222222222'.
+    APPEND ls_stub TO lt_stubs.
+
+    APPEND 'zcl_myclass.clas.abap' TO lt_wanted_files.
+
+    zcl_abapgit_git_porcelain=>filter_stubs(
+      EXPORTING it_wanted_files = lt_wanted_files
+      CHANGING  ct_stubs        = lt_stubs ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lines( lt_stubs )
+      exp = 1
+      msg = 'Only matching stub must remain' ).
+
+    READ TABLE lt_stubs INTO ls_stub INDEX 1.
+    cl_abap_unit_assert=>assert_char_cp(
+      act = to_lower( ls_stub-filename )
+      exp = 'zcl_myclass*'
+      msg = 'Remaining stub must be the matching one' ).
 
   ENDMETHOD.
 

@@ -132,6 +132,11 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         VALUE(rt_files) TYPE zif_abapgit_git_definitions=>ty_files_tt
       RAISING
         zcx_abapgit_exception.
+    CLASS-METHODS filter_stubs
+      IMPORTING
+        !it_wanted_files TYPE string_table
+      CHANGING
+        !ct_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt .
     CLASS-METHODS walk_for_blobs
       IMPORTING
         !it_objects  TYPE zif_abapgit_definitions=>ty_objects_tt
@@ -520,8 +525,6 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
           lt_blob_objects TYPE zif_abapgit_definitions=>ty_objects_tt,
           ls_obj          TYPE zif_abapgit_definitions=>ty_object.
 
-    DATA lt_wanted TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
-
     FIELD-SYMBOLS: <ls_stub> LIKE LINE OF lt_stubs.
 
     READ TABLE it_objects INTO ls_object
@@ -554,12 +557,8 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
     " Filter stubs to only the requested files before Phase 2
     IF it_wanted_files IS NOT INITIAL.
-      lt_wanted = it_wanted_files.
-      LOOP AT lt_stubs ASSIGNING <ls_stub>.
-        IF NOT line_exists( lt_wanted[ table_line = to_lower( <ls_stub>-filename ) ] ).
-          DELETE lt_stubs.
-        ENDIF.
-      ENDLOOP.
+      filter_stubs( EXPORTING it_wanted_files = it_wanted_files
+                    CHANGING  ct_stubs        = lt_stubs ).
     ENDIF.
 
     " Phase 2: fetch only the needed blobs by SHA
@@ -866,6 +865,22 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
                       iv_sha1    = <ls_node>-sha1
                       iv_path    = lv_path
             CHANGING  ct_files   = ct_files ).
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD filter_stubs.
+
+    DATA lt_wanted TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
+
+    FIELD-SYMBOLS <ls_stub> LIKE LINE OF ct_stubs.
+
+    lt_wanted = it_wanted_files.
+    LOOP AT ct_stubs ASSIGNING <ls_stub>.
+      IF NOT line_exists( lt_wanted[ table_line = to_lower( <ls_stub>-filename ) ] ).
+        DELETE ct_stubs.
+      ENDIF.
     ENDLOOP.
 
   ENDMETHOD.
