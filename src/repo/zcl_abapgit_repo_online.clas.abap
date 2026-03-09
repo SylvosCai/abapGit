@@ -49,6 +49,8 @@ CLASS zcl_abapgit_repo_online DEFINITION
       RAISING
         zcx_abapgit_exception .
     METHODS fetch_remote
+      IMPORTING
+        !ii_obj_filter TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RAISING
         zcx_abapgit_exception .
     METHODS get_objects
@@ -77,8 +79,17 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress TYPE REF TO zif_abapgit_progress,
-          ls_pull     TYPE zcl_abapgit_git_porcelain=>ty_pull_result.
+    DATA: li_progress   TYPE REF TO zif_abapgit_progress,
+          ls_pull       TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lv_filter     TYPE string,
+          lt_tadir      TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          ls_tadir      TYPE zif_abapgit_definitions=>ty_tadir,
+          lt_files      TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_keep       TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          ls_item       TYPE zif_abapgit_definitions=>ty_item,
+          lo_dot        TYPE REF TO zcl_abapgit_dot_abapgit.
+
+    FIELD-SYMBOLS: <ls_file> LIKE LINE OF lt_files.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
@@ -89,15 +100,64 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
     li_progress->show( iv_current = 1
                        iv_text    = 'Fetch remote files' ).
 
-    IF get_selected_commit( ) IS INITIAL.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch( iv_url         = get_url( )
-                                                           iv_branch_name = get_selected_branch( ) ).
-    ELSE.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit( iv_url         = get_url( )
-                                                           iv_commit_hash = get_selected_commit( ) ).
+    IF ii_obj_filter IS NOT INITIAL.
+      lv_filter = 'blob:none'.
     ENDIF.
 
-    set_files_remote( ls_pull-files ).
+    IF get_selected_commit( ) IS INITIAL.
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
+        iv_url         = get_url( )
+        iv_branch_name = get_selected_branch( )
+        iv_filter      = lv_filter ).
+    ELSE.
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
+        iv_url         = get_url( )
+        iv_commit_hash = get_selected_commit( )
+        iv_filter      = lv_filter ).
+    ENDIF.
+
+    IF ii_obj_filter IS NOT INITIAL AND lv_filter IS NOT INITIAL.
+      " Two-phase path: ls_pull-files contains stubs for all files + their blob data.
+      " Filter to keep only requested objects + root dot-files.
+      lt_tadir = ii_obj_filter->get_filter( ).
+      lo_dot   = get_dot_abapgit( ).
+
+      lt_files = ls_pull-files.
+      LOOP AT lt_files ASSIGNING <ls_file>.
+        " Always keep root-level dot-files (.abapgit.xml, .apack-manifest.yml, etc.)
+        IF <ls_file>-path = zif_abapgit_definitions=>c_root_dir
+            AND <ls_file>-filename+0(1) = '.'.
+          APPEND <ls_file> TO lt_keep.
+          CONTINUE.
+        ENDIF.
+
+        " Keep files that belong to a requested object
+        TRY.
+            zcl_abapgit_filename_logic=>file_to_object(
+              EXPORTING
+                iv_filename = <ls_file>-filename
+                iv_path     = <ls_file>-path
+                io_dot      = lo_dot
+              IMPORTING
+                es_item     = ls_item ).
+          CATCH zcx_abapgit_exception.
+            CONTINUE.
+        ENDTRY.
+
+        READ TABLE lt_tadir INTO ls_tadir
+          WITH KEY object   = ls_item-obj_type
+                   obj_name = ls_item-obj_name
+          TRANSPORTING NO FIELDS.
+        IF sy-subrc = 0.
+          APPEND <ls_file> TO lt_keep.
+        ENDIF.
+      ENDLOOP.
+
+      set_files_remote( lt_keep ).
+    ELSE.
+      set_files_remote( ls_pull-files ).
+    ENDIF.
+
     set_objects( ls_pull-objects ).
     mv_current_commit = ls_pull-commit.
 
@@ -414,7 +474,7 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
 
   METHOD zif_abapgit_repo~get_files_remote.
-    fetch_remote( ).
+    fetch_remote( ii_obj_filter ).
     rt_files = super->get_files_remote(
       ii_obj_filter   = ii_obj_filter
       iv_ignore_files = iv_ignore_files ).

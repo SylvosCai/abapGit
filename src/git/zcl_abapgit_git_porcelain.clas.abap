@@ -24,6 +24,7 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         !iv_url          TYPE string
         !iv_branch_name  TYPE string
         !iv_deepen_level TYPE i DEFAULT 1
+        !iv_filter       TYPE string OPTIONAL
       RETURNING
         VALUE(rs_result) TYPE ty_pull_result
       RAISING
@@ -33,6 +34,7 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
         !iv_url          TYPE string
         !iv_commit_hash  TYPE zif_abapgit_git_definitions=>ty_sha1
         !iv_deepen_level TYPE i DEFAULT 1
+        !iv_filter       TYPE string OPTIONAL
       RETURNING
         VALUE(rs_result) TYPE ty_pull_result
       RAISING
@@ -121,10 +123,22 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
       IMPORTING
         !iv_commit      TYPE zif_abapgit_git_definitions=>ty_sha1
         !it_objects     TYPE zif_abapgit_definitions=>ty_objects_tt
+        !iv_url         TYPE string OPTIONAL
+        !iv_filter      TYPE string OPTIONAL
       RETURNING
         VALUE(rt_files) TYPE zif_abapgit_git_definitions=>ty_files_tt
       RAISING
         zcx_abapgit_exception.
+    CLASS-METHODS walk_for_blobs
+      IMPORTING
+        !it_objects  TYPE zif_abapgit_definitions=>ty_objects_tt
+        !iv_sha1     TYPE zif_abapgit_git_definitions=>ty_sha1
+        !iv_path     TYPE string
+        !iv_root     TYPE abap_bool DEFAULT abap_false
+      CHANGING
+        !ct_stubs    TYPE zif_abapgit_git_definitions=>ty_files_tt
+      RAISING
+        zcx_abapgit_exception .
     CLASS-METHODS walk
       IMPORTING
         !it_objects TYPE zif_abapgit_definitions=>ty_objects_tt
@@ -496,8 +510,14 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
   METHOD pull.
 
-    DATA: ls_object TYPE zif_abapgit_definitions=>ty_object,
-          ls_commit TYPE zcl_abapgit_git_pack=>ty_commit.
+    DATA: ls_object   TYPE zif_abapgit_definitions=>ty_object,
+          ls_commit   TYPE zcl_abapgit_git_pack=>ty_commit,
+          lt_stubs    TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_blob_hashes TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
+          lt_blob_objects TYPE zif_abapgit_definitions=>ty_objects_tt,
+          ls_obj      TYPE zif_abapgit_definitions=>ty_object.
+
+    FIELD-SYMBOLS: <ls_stub> LIKE LINE OF lt_stubs.
 
     READ TABLE it_objects INTO ls_object
       WITH KEY type COMPONENTS
@@ -510,44 +530,87 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
     ls_commit = zcl_abapgit_git_pack=>decode_commit( ls_object-data ).
 
-    walk( EXPORTING it_objects = it_objects
-                    iv_sha1    = ls_commit-tree
-                    iv_path    = '/'
-          CHANGING  ct_files   = rt_files ).
+    IF iv_filter IS INITIAL OR iv_url IS INITIAL.
+      " No filter or no URL → existing full walk
+      walk( EXPORTING it_objects = it_objects
+                      iv_sha1    = ls_commit-tree
+                      iv_path    = '/'
+            CHANGING  ct_files   = rt_files ).
+      RETURN.
+    ENDIF.
+
+    " Phase 1 result: tree structure only, no blob data
+    " Collect all file stubs (path + filename + blob sha1)
+    walk_for_blobs( EXPORTING it_objects = it_objects
+                               iv_sha1    = ls_commit-tree
+                               iv_path    = '/'
+                               iv_root    = abap_true
+                   CHANGING   ct_stubs   = lt_stubs ).
+
+    " Phase 2: fetch only the needed blobs by SHA
+    LOOP AT lt_stubs ASSIGNING <ls_stub>.
+      APPEND <ls_stub>-sha1 TO lt_blob_hashes.
+    ENDLOOP.
+
+    lt_blob_objects = zcl_abapgit_git_transport=>upload_pack_blobs(
+      iv_url    = iv_url
+      it_hashes = lt_blob_hashes ).
+
+    " Assemble final file list: stubs + blob data
+    LOOP AT lt_stubs ASSIGNING <ls_stub>.
+      READ TABLE lt_blob_objects INTO ls_obj WITH KEY sha1 = <ls_stub>-sha1.
+      IF sy-subrc = 0.
+        <ls_stub>-data = ls_obj-data.
+      ENDIF.
+    ENDLOOP.
+
+    rt_files = lt_stubs.
 
   ENDMETHOD.
 
 
   METHOD pull_by_branch.
 
+    DATA lv_filter_applied TYPE abap_bool.
+
     zcl_abapgit_git_transport=>upload_pack_by_branch(
       EXPORTING
         iv_url          = iv_url
         iv_branch_name  = iv_branch_name
         iv_deepen_level = iv_deepen_level
+        iv_filter       = iv_filter
       IMPORTING
-        et_objects      = rs_result-objects
-        ev_branch       = rs_result-commit ).
+        et_objects         = rs_result-objects
+        ev_branch          = rs_result-commit
+        ev_filter_applied  = lv_filter_applied ).
 
     rs_result-files = pull( iv_commit  = rs_result-commit
-                            it_objects = rs_result-objects ).
+                            it_objects = rs_result-objects
+                            iv_url     = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
+                            iv_filter  = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter ) ).
 
   ENDMETHOD.
 
 
   METHOD pull_by_commit.
 
+    DATA lv_filter_applied TYPE abap_bool.
+
     zcl_abapgit_git_transport=>upload_pack_by_commit(
       EXPORTING
         iv_url          = iv_url
         iv_hash         = iv_commit_hash
         iv_deepen_level = iv_deepen_level
+        iv_filter       = iv_filter
       IMPORTING
-        et_objects      = rs_result-objects
-        ev_commit       = rs_result-commit ).
+        et_objects         = rs_result-objects
+        ev_commit          = rs_result-commit
+        ev_filter_applied  = lv_filter_applied ).
 
     rs_result-files = pull( iv_commit  = rs_result-commit
-                            it_objects = rs_result-objects ).
+                            it_objects = rs_result-objects
+                            iv_url     = COND #( WHEN lv_filter_applied = abap_true THEN iv_url )
+                            iv_filter  = COND #( WHEN lv_filter_applied = abap_true THEN iv_filter ) ).
 
   ENDMETHOD.
 
@@ -786,6 +849,48 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
                       iv_sha1    = <ls_node>-sha1
                       iv_path    = lv_path
             CHANGING  ct_files   = ct_files ).
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD walk_for_blobs.
+
+    DATA: lv_path  TYPE string,
+          ls_stub  LIKE LINE OF ct_stubs,
+          lt_nodes TYPE zcl_abapgit_git_pack=>ty_nodes_tt.
+
+    FIELD-SYMBOLS: <ls_tree> LIKE LINE OF it_objects,
+                   <ls_node> LIKE LINE OF lt_nodes.
+
+
+    READ TABLE it_objects ASSIGNING <ls_tree>
+      WITH KEY type COMPONENTS
+        type = zif_abapgit_git_definitions=>c_type-tree
+        sha1 = iv_sha1.
+    IF sy-subrc <> 0.
+      zcx_abapgit_exception=>raise( 'Walk, tree not found' ).
+    ENDIF.
+
+    lt_nodes = zcl_abapgit_git_pack=>decode_tree( <ls_tree>-data ).
+
+    LOOP AT lt_nodes ASSIGNING <ls_node> WHERE chmod = zif_abapgit_git_definitions=>c_chmod-file.
+      CLEAR ls_stub.
+      ls_stub-path     = iv_path.
+      ls_stub-filename = <ls_node>-name.
+      ls_stub-sha1     = <ls_node>-sha1.
+      " No ls_stub-data — blobs were not fetched in Phase 1
+      APPEND ls_stub TO ct_stubs.
+    ENDLOOP.
+
+    LOOP AT lt_nodes ASSIGNING <ls_node> WHERE chmod = zif_abapgit_git_definitions=>c_chmod-dir.
+      CONCATENATE iv_path <ls_node>-name '/' INTO lv_path.
+
+      walk_for_blobs( EXPORTING it_objects = it_objects
+                                 iv_sha1    = <ls_node>-sha1
+                                 iv_path    = lv_path
+                                 iv_root    = abap_false
+                     CHANGING   ct_stubs   = ct_stubs ).
     ENDLOOP.
 
   ENDMETHOD.
