@@ -624,7 +624,8 @@ CLASS zcl_abapgit_objects IMPLEMENTATION.
 
     zcl_abapgit_objects_activation=>clear( ).
 
-    lt_remote = ii_repo->get_files_remote( iv_ignore_files = abap_true ).
+    lt_remote = ii_repo->get_files_remote( iv_ignore_files = abap_true
+                                           ii_obj_filter   = ii_obj_filter ).
 
     lt_results = zcl_abapgit_file_deserialize=>get_results(
       ii_repo       = ii_repo
