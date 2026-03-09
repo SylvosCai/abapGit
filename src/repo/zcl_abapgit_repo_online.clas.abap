@@ -79,16 +79,18 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress   TYPE REF TO zif_abapgit_progress,
-          ls_pull       TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
-          lv_filter     TYPE string,
-          lt_tadir      TYPE zif_abapgit_definitions=>ty_tadir_tt,
-          lt_files      TYPE zif_abapgit_git_definitions=>ty_files_tt,
-          lt_keep       TYPE zif_abapgit_git_definitions=>ty_files_tt,
-          ls_item       TYPE zif_abapgit_definitions=>ty_item,
-          lo_dot        TYPE REF TO zcl_abapgit_dot_abapgit.
+    DATA: li_progress      TYPE REF TO zif_abapgit_progress,
+          ls_pull          TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lv_filter        TYPE string,
+          lt_tadir         TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          lt_files         TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_keep          TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_wanted_files  TYPE string_table,
+          ls_item          TYPE zif_abapgit_definitions=>ty_item,
+          lo_dot           TYPE REF TO zcl_abapgit_dot_abapgit.
 
-    FIELD-SYMBOLS: <ls_file> LIKE LINE OF lt_files.
+    FIELD-SYMBOLS: <ls_file>  LIKE LINE OF lt_files,
+                   <ls_tadir> LIKE LINE OF lt_tadir.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
@@ -101,25 +103,33 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
     IF ii_obj_filter IS NOT INITIAL.
       lv_filter = 'blob:none'.
+
+      " Build list of expected filenames from the requested objects
+      " using a lowercase obj_name prefix (e.g. 'zcl_myclass.')
+      lt_tadir = ii_obj_filter->get_filter( ).
+      LOOP AT lt_tadir ASSIGNING <ls_tadir>.
+        APPEND to_lower( <ls_tadir>-obj_name ) && '.' TO lt_wanted_files.
+      ENDLOOP.
     ENDIF.
 
     IF get_selected_commit( ) IS INITIAL.
       ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
-        iv_url         = get_url( )
-        iv_branch_name = get_selected_branch( )
-        iv_filter      = lv_filter ).
+        iv_url          = get_url( )
+        iv_branch_name  = get_selected_branch( )
+        iv_filter       = lv_filter
+        it_wanted_files = lt_wanted_files ).
     ELSE.
       ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
-        iv_url         = get_url( )
-        iv_commit_hash = get_selected_commit( )
-        iv_filter      = lv_filter ).
+        iv_url          = get_url( )
+        iv_commit_hash  = get_selected_commit( )
+        iv_filter       = lv_filter
+        it_wanted_files = lt_wanted_files ).
     ENDIF.
 
     IF ii_obj_filter IS NOT INITIAL AND lv_filter IS NOT INITIAL.
-      " Two-phase path: ls_pull-files contains stubs for all files + their blob data.
+      " Two-phase path: ls_pull-files contains stubs for requested files + their blob data.
       " Filter to keep only requested objects + root dot-files.
-      lt_tadir = ii_obj_filter->get_filter( ).
-      lo_dot   = get_dot_abapgit( ).
+      lo_dot = get_dot_abapgit( ).
 
       lt_files = ls_pull-files.
       LOOP AT lt_files ASSIGNING <ls_file>.
