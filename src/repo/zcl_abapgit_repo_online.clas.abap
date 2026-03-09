@@ -83,7 +83,6 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
           ls_pull       TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
           lv_filter     TYPE string,
           lt_tadir      TYPE zif_abapgit_definitions=>ty_tadir_tt,
-          ls_tadir      TYPE zif_abapgit_definitions=>ty_tadir,
           lt_files      TYPE zif_abapgit_git_definitions=>ty_files_tt,
           lt_keep       TYPE zif_abapgit_git_definitions=>ty_files_tt,
           ls_item       TYPE zif_abapgit_definitions=>ty_item,
@@ -144,10 +143,9 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
             CONTINUE.
         ENDTRY.
 
-        READ TABLE lt_tadir INTO ls_tadir
+        READ TABLE lt_tadir TRANSPORTING NO FIELDS
           WITH KEY object   = ls_item-obj_type
-                   obj_name = ls_item-obj_name
-          TRANSPORTING NO FIELDS.
+                   obj_name = ls_item-obj_name.
         IF sy-subrc = 0.
           APPEND <ls_file> TO lt_keep.
         ENDIF.
