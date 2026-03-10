@@ -379,7 +379,7 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD filter_stubs_keeps_match.
-    " filter_stubs with a matching filename keeps the stub
+    " filter_stubs with a prefix entry keeps all files for that object
 
     DATA lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt.
     DATA ls_stub         LIKE LINE OF lt_stubs.
@@ -390,7 +390,8 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
     ls_stub-sha1     = '1111111111111111111111111111111111111111'.
     APPEND ls_stub TO lt_stubs.
 
-    APPEND 'zcl_myclass.clas.abap' TO lt_wanted_files.
+    " fetch_remote builds prefixes as to_lower(obj_name) && '.'
+    APPEND 'zcl_myclass.' TO lt_wanted_files.
 
     zcl_abapgit_git_porcelain=>filter_stubs(
       EXPORTING it_wanted_files = lt_wanted_files
@@ -404,13 +405,14 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD filter_stubs_removes_no_match.
-    " filter_stubs removes non-matching stubs and is case-insensitive
+    " filter_stubs removes non-matching stubs and is case-insensitive,
+    " using prefix semantics matching what fetch_remote passes
 
     DATA lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt.
     DATA ls_stub         LIKE LINE OF lt_stubs.
     DATA lt_wanted_files TYPE string_table.
 
-    " Stub 1: matches (uppercase in stub, lowercase in wanted list)
+    " Stub 1: matches (uppercase in stub, lowercase prefix in wanted list)
     ls_stub-filename = 'ZCL_MYCLASS.clas.abap'.
     ls_stub-path     = '/'.
     ls_stub-sha1     = '1111111111111111111111111111111111111111'.
@@ -421,7 +423,7 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
     ls_stub-sha1     = '2222222222222222222222222222222222222222'.
     APPEND ls_stub TO lt_stubs.
 
-    APPEND 'zcl_myclass.clas.abap' TO lt_wanted_files.
+    APPEND 'zcl_myclass.' TO lt_wanted_files.
 
     zcl_abapgit_git_porcelain=>filter_stubs(
       EXPORTING it_wanted_files = lt_wanted_files

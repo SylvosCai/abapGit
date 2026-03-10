@@ -872,13 +872,20 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
   METHOD filter_stubs.
 
-    DATA lt_wanted TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
-
+    " it_wanted_files contains lowercase obj_name prefixes, e.g. 'zcl_myclass.'
+    " A stub matches if its filename starts with any of those prefixes.
     FIELD-SYMBOLS <ls_stub> LIKE LINE OF ct_stubs.
 
-    lt_wanted = it_wanted_files.
     LOOP AT ct_stubs ASSIGNING <ls_stub>.
-      IF NOT line_exists( lt_wanted[ table_line = to_lower( <ls_stub>-filename ) ] ).
+      DATA(lv_lower) = to_lower( <ls_stub>-filename ).
+      DATA lv_match TYPE abap_bool VALUE abap_false.
+      LOOP AT it_wanted_files INTO DATA(lv_prefix).
+        IF lv_lower CP lv_prefix && '*'.
+          lv_match = abap_true.
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+      IF lv_match = abap_false.
         DELETE ct_stubs.
       ENDIF.
     ENDLOOP.
