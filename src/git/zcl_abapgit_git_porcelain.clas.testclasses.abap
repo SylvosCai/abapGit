@@ -30,6 +30,8 @@ CLASS ltcl_git_porcelain DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHO
       filter_stubs_keeps_match FOR TESTING
         RAISING zcx_abapgit_exception,
       filter_stubs_removes_no_match FOR TESTING
+        RAISING zcx_abapgit_exception,
+      filter_stubs_empty_wanted FOR TESTING
         RAISING zcx_abapgit_exception.
 
     METHODS build_tree_object
@@ -439,6 +441,37 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
       act = to_lower( ls_stub-filename )
       exp = 'zcl_myclass*'
       msg = 'Remaining stub must be the matching one' ).
+
+  ENDMETHOD.
+
+  METHOD filter_stubs_empty_wanted.
+    " filter_stubs with empty it_wanted_files removes all stubs.
+    " This covers the edge case where ii_obj_filter matches zero objects:
+    " fetch_remote sets iv_filter='blob:none' but lt_wanted_files is empty.
+    " Without the guard, all blobs would be fetched. With always-calling
+    " filter_stubs, zero blobs are fetched instead.
+
+    DATA lt_stubs        TYPE zif_abapgit_git_definitions=>ty_files_tt.
+    DATA ls_stub         LIKE LINE OF lt_stubs.
+    DATA lt_wanted_files TYPE string_table.  " intentionally empty
+
+    ls_stub-filename = 'zcl_myclass.clas.abap'.
+    ls_stub-path     = '/'.
+    ls_stub-sha1     = '1111111111111111111111111111111111111111'.
+    APPEND ls_stub TO lt_stubs.
+
+    ls_stub-filename = 'zcl_other.clas.xml'.
+    ls_stub-sha1     = '2222222222222222222222222222222222222222'.
+    APPEND ls_stub TO lt_stubs.
+
+    zcl_abapgit_git_porcelain=>filter_stubs(
+      EXPORTING it_wanted_files = lt_wanted_files
+      CHANGING  ct_stubs        = lt_stubs ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lines( lt_stubs )
+      exp = 0
+      msg = 'All stubs must be removed when wanted list is empty' ).
 
   ENDMETHOD.
 

@@ -555,11 +555,10 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
                                iv_root    = abap_true
                    CHANGING   ct_stubs   = lt_stubs ).
 
-    " Filter stubs to only the requested files before Phase 2
-    IF it_wanted_files IS NOT INITIAL.
-      filter_stubs( EXPORTING it_wanted_files = it_wanted_files
-                    CHANGING  ct_stubs        = lt_stubs ).
-    ENDIF.
+    " Filter stubs to only the requested files before Phase 2.
+    " If it_wanted_files is empty (filter matched zero objects), all stubs are deleted → zero blobs fetched.
+    filter_stubs( EXPORTING it_wanted_files = it_wanted_files
+                  CHANGING  ct_stubs        = lt_stubs ).
 
     " Phase 2: fetch only the needed blobs by SHA
     LOOP AT lt_stubs ASSIGNING <ls_stub>.
