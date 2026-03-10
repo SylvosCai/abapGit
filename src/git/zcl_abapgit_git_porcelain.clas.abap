@@ -874,11 +874,12 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
     " it_wanted_files contains lowercase obj_name prefixes, e.g. 'zcl_myclass.'
     " A stub matches if its filename starts with any of those prefixes.
+    DATA lv_match TYPE abap_bool.
     FIELD-SYMBOLS <ls_stub> LIKE LINE OF ct_stubs.
 
     LOOP AT ct_stubs ASSIGNING <ls_stub>.
       DATA(lv_lower) = to_lower( <ls_stub>-filename ).
-      DATA lv_match TYPE abap_bool VALUE abap_false.
+      lv_match = abap_false.
       LOOP AT it_wanted_files INTO DATA(lv_prefix).
         IF lv_lower CP lv_prefix && '*'.
           lv_match = abap_true.
