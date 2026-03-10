@@ -25,6 +25,7 @@ CLASS zcl_abapgit_objects DEFINITION
     CLASS-METHODS deserialize_checks
       IMPORTING
         !ii_repo         TYPE REF TO zif_abapgit_repo
+        !ii_obj_filter   TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RETURNING
         VALUE(rs_checks) TYPE zif_abapgit_definitions=>ty_deserialize_checks
       RAISING
@@ -803,7 +804,9 @@ CLASS zcl_abapgit_objects IMPLEMENTATION.
 
   METHOD deserialize_checks.
 
-    rs_checks = zcl_abapgit_objects_check=>deserialize_checks( ii_repo ).
+    rs_checks = zcl_abapgit_objects_check=>deserialize_checks(
+      ii_repo       = ii_repo
+      ii_obj_filter = ii_obj_filter ).
 
   ENDMETHOD.
 

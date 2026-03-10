@@ -590,7 +590,9 @@ CLASS zcl_abapgit_repo IMPLEMENTATION.
     check_language( ).
     check_abap_language_version( ).
 
-    rs_checks = zcl_abapgit_objects=>deserialize_checks( me ).
+    rs_checks = zcl_abapgit_objects=>deserialize_checks(
+      ii_repo       = me
+      ii_obj_filter = ii_obj_filter ).
 
     lt_requirements = get_dot_abapgit( )->get_data( )-requirements.
     rs_checks-requirements-met = zcl_abapgit_repo_requirements=>is_requirements_met( lt_requirements ).
