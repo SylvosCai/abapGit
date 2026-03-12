@@ -28,6 +28,10 @@ CLASS zcl_abapgit_repo_online DEFINITION
         REDEFINITION .
     METHODS zif_abapgit_repo~has_remote_source
         REDEFINITION .
+    METHODS zif_abapgit_repo~find_remote_dot_abapgit
+        REDEFINITION .
+    METHODS zif_abapgit_repo~deserialize_checks
+        REDEFINITION .
     METHODS constructor
       IMPORTING
         is_data TYPE zif_abapgit_persistence=>ty_repo.
@@ -49,6 +53,8 @@ CLASS zcl_abapgit_repo_online DEFINITION
       RAISING
         zcx_abapgit_exception .
     METHODS fetch_remote
+      IMPORTING
+        !ii_obj_filter TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RAISING
         zcx_abapgit_exception .
     METHODS get_objects
@@ -77,12 +83,23 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress TYPE REF TO zif_abapgit_progress,
-          ls_pull     TYPE zcl_abapgit_git_porcelain=>ty_pull_result.
+    DATA: li_progress     TYPE REF TO zif_abapgit_progress,
+          ls_pull         TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lt_tadir        TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          lt_files        TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_keep         TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          ls_item         TYPE zif_abapgit_definitions=>ty_item,
+          lo_dot          TYPE REF TO zcl_abapgit_dot_abapgit,
+          li_effective_filter TYPE REF TO zif_abapgit_object_filter.
+
+    FIELD-SYMBOLS: <ls_file>  LIKE LINE OF lt_files,
+                   <ls_tadir> LIKE LINE OF lt_tadir.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
     ENDIF.
+
+    li_effective_filter = ii_obj_filter.
 
     li_progress = zcl_abapgit_progress=>get_instance( 1 ).
 
@@ -90,14 +107,57 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
                        iv_text    = 'Fetch remote files' ).
 
     IF get_selected_commit( ) IS INITIAL.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch( iv_url         = get_url( )
-                                                           iv_branch_name = get_selected_branch( ) ).
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
+        iv_url         = get_url( )
+        iv_branch_name = get_selected_branch( )
+        ii_obj_filter  = li_effective_filter ).
     ELSE.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit( iv_url         = get_url( )
-                                                           iv_commit_hash = get_selected_commit( ) ).
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
+        iv_url          = get_url( )
+        iv_commit_hash  = get_selected_commit( )
+        ii_obj_filter   = li_effective_filter ).
     ENDIF.
 
-    set_files_remote( ls_pull-files ).
+    IF li_effective_filter IS NOT INITIAL.
+      " Two-phase path: keep only requested objects + root dot-files.
+      lo_dot = get_dot_abapgit( ).
+      lt_tadir = li_effective_filter->get_filter( ).
+
+      lt_files = ls_pull-files.
+      LOOP AT lt_files ASSIGNING <ls_file>.
+        " Always keep root-level dot-files (.abapgit.xml, .apack-manifest.yml, etc.)
+        IF <ls_file>-path = zif_abapgit_definitions=>c_root_dir
+            AND <ls_file>-filename+0(1) = '.'.
+          APPEND <ls_file> TO lt_keep.
+          CONTINUE.
+        ENDIF.
+
+        " Keep files that belong to a requested object
+        TRY.
+            zcl_abapgit_filename_logic=>file_to_object(
+              EXPORTING
+                iv_filename = <ls_file>-filename
+                iv_path     = <ls_file>-path
+                io_dot      = lo_dot
+              IMPORTING
+                es_item     = ls_item ).
+          CATCH zcx_abapgit_exception.
+            CONTINUE.
+        ENDTRY.
+
+        READ TABLE lt_tadir TRANSPORTING NO FIELDS
+          WITH KEY object   = ls_item-obj_type
+                   obj_name = ls_item-obj_name.
+        IF sy-subrc = 0.
+          APPEND <ls_file> TO lt_keep.
+        ENDIF.
+      ENDLOOP.
+
+      set_files_remote( lt_keep ).
+    ELSE.
+      set_files_remote( ls_pull-files ).
+    ENDIF.
+
     set_objects( ls_pull-objects ).
     mv_current_commit = ls_pull-commit.
 
@@ -414,7 +474,7 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
 
   METHOD zif_abapgit_repo~get_files_remote.
-    fetch_remote( ).
+    fetch_remote( ii_obj_filter ).
     rt_files = super->get_files_remote(
       ii_obj_filter   = ii_obj_filter
       iv_ignore_files = iv_ignore_files ).
@@ -437,4 +497,44 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
   METHOD zif_abapgit_repo~has_remote_source.
     rv_yes = abap_true.
   ENDMETHOD.
+
+
+  METHOD zif_abapgit_repo~find_remote_dot_abapgit.
+
+    DATA: lo_v2        TYPE REF TO zif_abapgit_gitv2_porcelain,
+          li_branches  TYPE REF TO zif_abapgit_git_branch_list,
+          lt_expanded  TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
+          ls_dot_entry LIKE LINE OF lt_expanded,
+          lv_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1,
+          lv_data      TYPE xstring.
+
+    " Cheap SHA1 lookup via info/refs (no pack download)
+    li_branches = zcl_abapgit_git_factory=>get_git_transport( )->branches( get_url( ) ).
+    lv_sha1 = li_branches->find_by_name( get_selected_branch( ) )-sha1.
+
+    " Phase 1: get tree structure without blobs
+    lo_v2 = zcl_abapgit_git_factory=>get_v2_porcelain( ).
+    lt_expanded = lo_v2->list_no_blobs( iv_url  = get_url( )
+                                        iv_sha1 = lv_sha1 ).
+
+    " Find .abapgit.xml at root
+    READ TABLE lt_expanded INTO ls_dot_entry
+      WITH KEY path = zif_abapgit_definitions=>c_root_dir
+               name = zif_abapgit_definitions=>c_dot_abapgit.
+    IF sy-subrc = 0.
+      lv_data = lo_v2->fetch_blob( iv_url  = get_url( )
+                                   iv_sha1 = ls_dot_entry-sha1 ).
+      ro_dot = zcl_abapgit_dot_abapgit=>deserialize( lv_data ).
+      set_dot_abapgit( ro_dot ).
+      COMMIT WORK AND WAIT.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD zif_abapgit_repo~deserialize_checks.
+    reset_remote( ).
+    rs_checks = super->deserialize_checks( ii_obj_filter ).
+  ENDMETHOD.
+
 ENDCLASS.
