@@ -83,81 +83,49 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress     TYPE REF TO zif_abapgit_progress,
-          ls_pull         TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
-          lt_tadir        TYPE zif_abapgit_definitions=>ty_tadir_tt,
-          lt_files        TYPE zif_abapgit_git_definitions=>ty_files_tt,
-          lt_keep         TYPE zif_abapgit_git_definitions=>ty_files_tt,
-          ls_item         TYPE zif_abapgit_definitions=>ty_item,
-          lo_dot          TYPE REF TO zcl_abapgit_dot_abapgit,
+    DATA: li_progress         TYPE REF TO zif_abapgit_progress,
+          ls_pull             TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lt_tadir            TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          lt_wanted_files     TYPE string_table,
           li_effective_filter TYPE REF TO zif_abapgit_object_filter.
 
-    FIELD-SYMBOLS: <ls_file>  LIKE LINE OF lt_files,
-                   <ls_tadir> LIKE LINE OF lt_tadir.
+    FIELD-SYMBOLS: <ls_tadir> LIKE LINE OF lt_tadir.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
     ENDIF.
 
-    li_effective_filter = ii_obj_filter.
+    IF ii_obj_filter IS NOT INITIAL.
+      li_effective_filter = ii_obj_filter.
+    ENDIF.
 
     li_progress = zcl_abapgit_progress=>get_instance( 1 ).
 
     li_progress->show( iv_current = 1
                        iv_text    = 'Fetch remote files' ).
 
+    IF li_effective_filter IS NOT INITIAL.
+      " Build filename prefix list from filter — git layer needs string prefixes,
+      " not ABAP object types. Filenames follow <obj_name_lower>.<obj_type_lower>.*
+      lt_tadir = li_effective_filter->get_filter( ).
+      LOOP AT lt_tadir ASSIGNING <ls_tadir>.
+        APPEND to_lower( <ls_tadir>-obj_name ) && '.' TO lt_wanted_files.
+      ENDLOOP.
+    ENDIF.
+
     IF get_selected_commit( ) IS INITIAL.
       ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
-        iv_url         = get_url( )
-        iv_branch_name = get_selected_branch( )
-        ii_obj_filter  = li_effective_filter ).
+        iv_url          = get_url( )
+        iv_branch_name  = get_selected_branch( )
+        it_wanted_files = lt_wanted_files ).
     ELSE.
       ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
         iv_url          = get_url( )
         iv_commit_hash  = get_selected_commit( )
-        ii_obj_filter   = li_effective_filter ).
+        it_wanted_files = lt_wanted_files ).
     ENDIF.
 
-    IF li_effective_filter IS NOT INITIAL.
-      " Two-phase path: keep only requested objects + root dot-files.
-      lo_dot = get_dot_abapgit( ).
-      lt_tadir = li_effective_filter->get_filter( ).
-
-      lt_files = ls_pull-files.
-      LOOP AT lt_files ASSIGNING <ls_file>.
-        " Always keep root-level dot-files (.abapgit.xml, .apack-manifest.yml, etc.)
-        IF <ls_file>-path = zif_abapgit_definitions=>c_root_dir
-            AND <ls_file>-filename+0(1) = '.'.
-          APPEND <ls_file> TO lt_keep.
-          CONTINUE.
-        ENDIF.
-
-        " Keep files that belong to a requested object
-        TRY.
-            zcl_abapgit_filename_logic=>file_to_object(
-              EXPORTING
-                iv_filename = <ls_file>-filename
-                iv_path     = <ls_file>-path
-                io_dot      = lo_dot
-              IMPORTING
-                es_item     = ls_item ).
-          CATCH zcx_abapgit_exception.
-            CONTINUE.
-        ENDTRY.
-
-        READ TABLE lt_tadir TRANSPORTING NO FIELDS
-          WITH KEY object   = ls_item-obj_type
-                   obj_name = ls_item-obj_name.
-        IF sy-subrc = 0.
-          APPEND <ls_file> TO lt_keep.
-        ENDIF.
-      ENDLOOP.
-
-      set_files_remote( lt_keep ).
-    ELSE.
-      set_files_remote( ls_pull-files ).
-    ENDIF.
-
+    set_files_remote( ls_pull-files ).
     set_objects( ls_pull-objects ).
     mv_current_commit = ls_pull-commit.
 
