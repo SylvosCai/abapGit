@@ -123,7 +123,6 @@ CLASS zcl_abapgit_git_porcelain DEFINITION
       IMPORTING
         !iv_commit       TYPE zif_abapgit_git_definitions=>ty_sha1
         !it_objects      TYPE zif_abapgit_definitions=>ty_objects_tt
-        !iv_url          TYPE string OPTIONAL
         !it_wanted_files TYPE string_table OPTIONAL
       RETURNING
         VALUE(rt_files) TYPE zif_abapgit_git_definitions=>ty_files_tt
@@ -505,14 +504,11 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
   METHOD pull.
 
-    DATA: ls_object       TYPE zif_abapgit_definitions=>ty_object,
-          ls_commit       TYPE zcl_abapgit_git_pack=>ty_commit,
-          lt_expanded     TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
-          lt_sha1         TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
-          lt_blob_objects TYPE zif_abapgit_definitions=>ty_objects_tt,
-          ls_blob         TYPE zif_abapgit_definitions=>ty_object,
-          ls_file         LIKE LINE OF rt_files,
-          lo_v2           TYPE REF TO zif_abapgit_gitv2_porcelain.
+    DATA: ls_object   TYPE zif_abapgit_definitions=>ty_object,
+          ls_commit   TYPE zcl_abapgit_git_pack=>ty_commit,
+          lt_expanded TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
+          ls_blob     TYPE zif_abapgit_definitions=>ty_object,
+          ls_file     LIKE LINE OF rt_files.
 
     FIELD-SYMBOLS: <ls_exp> LIKE LINE OF lt_expanded.
 
@@ -527,8 +523,8 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
     ls_commit = zcl_abapgit_git_pack=>decode_commit( ls_object-data ).
 
-    IF it_wanted_files IS INITIAL OR iv_url IS INITIAL.
-      " No filter or no URL → full walk using objects already in pack
+    IF it_wanted_files IS INITIAL.
+      " No filter → full walk using objects already in pack
       walk( EXPORTING it_objects = it_objects
                       iv_sha1    = ls_commit-tree
                       iv_path    = '/'
@@ -544,18 +540,12 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
     filter_expanded( EXPORTING it_wanted_files = it_wanted_files
                      CHANGING  ct_expanded     = lt_expanded ).
 
-    " Phase 3: fetch only the needed blobs by SHA
+    " Phase 3: read blob content from it_objects — already downloaded by upload_pack
     LOOP AT lt_expanded ASSIGNING <ls_exp>.
-      APPEND <ls_exp>-sha1 TO lt_sha1.
-    ENDLOOP.
-
-    lo_v2 = zcl_abapgit_git_factory=>get_v2_porcelain( ).
-    lt_blob_objects = lo_v2->fetch_blobs( iv_url  = iv_url
-                                          it_sha1 = lt_sha1 ).
-
-    " Assemble final file list
-    LOOP AT lt_expanded ASSIGNING <ls_exp>.
-      READ TABLE lt_blob_objects INTO ls_blob WITH KEY sha1 = <ls_exp>-sha1.
+      READ TABLE it_objects INTO ls_blob
+        WITH KEY type COMPONENTS
+          type = zif_abapgit_git_definitions=>c_type-blob
+          sha1 = <ls_exp>-sha1.
       CLEAR ls_file.
       ls_file-path     = <ls_exp>-path.
       ls_file-filename = <ls_exp>-name.
@@ -580,9 +570,8 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
         et_objects = rs_result-objects
         ev_branch  = rs_result-commit ).
 
-    rs_result-files = pull( iv_commit      = rs_result-commit
-                            it_objects     = rs_result-objects
-                            iv_url         = iv_url
+    rs_result-files = pull( iv_commit       = rs_result-commit
+                            it_objects      = rs_result-objects
                             it_wanted_files = it_wanted_files ).
 
   ENDMETHOD.
@@ -601,7 +590,6 @@ CLASS zcl_abapgit_git_porcelain IMPLEMENTATION.
 
     rs_result-files = pull( iv_commit       = rs_result-commit
                             it_objects      = rs_result-objects
-                            iv_url          = iv_url
                             it_wanted_files = it_wanted_files ).
 
   ENDMETHOD.
