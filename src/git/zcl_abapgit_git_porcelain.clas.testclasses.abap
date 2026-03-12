@@ -187,7 +187,7 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD pull_full_walk_no_filter.
-    " pull without ii_obj_filter/iv_url should use full walk and populate blob data
+    " pull without it_wanted_files/iv_url should use full walk and populate blob data
 
     DATA lt_objects    TYPE zif_abapgit_definitions=>ty_objects_tt.
     DATA ls_obj        LIKE LINE OF lt_objects.
