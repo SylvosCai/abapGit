@@ -288,6 +288,9 @@ CLASS lcl_branch_list IMPLEMENTATION.
   METHOD zif_abapgit_git_branch_list~get_tags_only.
     ASSERT 1 = 2.
   ENDMETHOD.
+  METHOD zif_abapgit_git_branch_list~get_capabilities.
+    RETURN.
+  ENDMETHOD.
 ENDCLASS.
 
 CLASS lcl_gitv2 DEFINITION FINAL.
