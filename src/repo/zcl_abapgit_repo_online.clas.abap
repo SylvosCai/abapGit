@@ -113,6 +113,78 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
       ENDLOOP.
     ENDIF.
 
+    " When a filter is active and the server supports partial clone (filter capability),
+    " use a two-phase gitv2 fetch: Phase 1 lists tree entries without blob content,
+    " Phase 2 fetches only the blobs we actually need.  This avoids downloading the
+    " full pack for large repositories when only a handful of objects are requested.
+    IF li_effective_filter IS NOT INITIAL.
+
+      DATA: lo_v2        TYPE REF TO zif_abapgit_gitv2_porcelain,
+            li_branches  TYPE REF TO zif_abapgit_git_branch_list,
+            lt_expanded  TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
+            lt_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
+            lt_blobs     TYPE zif_abapgit_definitions=>ty_objects_tt,
+            lv_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1,
+            ls_blob      LIKE LINE OF lt_blobs,
+            ls_file      TYPE zif_abapgit_git_definitions=>ty_file,
+            lt_files     TYPE zif_abapgit_git_definitions=>ty_files_tt.
+
+      FIELD-SYMBOLS: <ls_exp> LIKE LINE OF lt_expanded,
+                     <lv_sha1> LIKE LINE OF lt_sha1.
+
+      li_branches = zcl_abapgit_git_factory=>get_git_transport( )->branches( get_url( ) ).
+
+      IF li_branches->get_capabilities( ) CS 'filter'.
+
+        " Phase 1: fetch tree structure without blob content
+        lo_v2 = zcl_abapgit_git_factory=>get_v2_porcelain( ).
+
+        IF get_selected_commit( ) IS INITIAL.
+          lv_sha1 = li_branches->find_by_name( get_selected_branch( ) )-sha1.
+          mv_current_commit = lv_sha1.
+        ELSE.
+          lv_sha1 = get_selected_commit( ).
+          mv_current_commit = lv_sha1.
+        ENDIF.
+
+        lt_expanded = lo_v2->list_no_blobs( iv_url  = get_url( )
+                                            iv_sha1 = lv_sha1 ).
+
+        " Narrow tree to only the files we need (+ root dot-files)
+        zcl_abapgit_git_porcelain=>filter_expanded(
+          EXPORTING it_wanted_files = lt_wanted_files
+          CHANGING  ct_expanded     = lt_expanded ).
+
+        " Phase 2: fetch only the required blobs by SHA1
+        LOOP AT lt_expanded ASSIGNING <ls_exp>.
+          APPEND <ls_exp>-sha1 TO lt_sha1.
+        ENDLOOP.
+
+        lt_blobs = lo_v2->fetch_blobs( iv_url  = get_url( )
+                                       it_sha1 = lt_sha1 ).
+
+        " Assemble files from expanded tree + fetched blobs
+        LOOP AT lt_expanded ASSIGNING <ls_exp>.
+          READ TABLE lt_blobs INTO ls_blob
+            WITH KEY sha1 = <ls_exp>-sha1.
+          CLEAR ls_file.
+          ls_file-path     = <ls_exp>-path.
+          ls_file-filename = <ls_exp>-name.
+          IF sy-subrc = 0.
+            ls_file-data = ls_blob-data.
+            ls_file-sha1 = ls_blob-sha1.
+          ENDIF.
+          APPEND ls_file TO lt_files.
+        ENDLOOP.
+
+        set_files_remote( lt_files ).
+        set_objects( lt_blobs ).
+        RETURN.
+
+      ENDIF.
+
+    ENDIF.
+
     IF get_selected_commit( ) IS INITIAL.
       ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
         iv_url          = get_url( )
