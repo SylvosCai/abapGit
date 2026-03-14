@@ -25,11 +25,11 @@ CLASS ltcl_git_porcelain DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHO
         RAISING zcx_abapgit_exception,
       filter_expanded_keeps_match FOR TESTING
         RAISING zcx_abapgit_exception,
-      filter_expanded_removes_no_match FOR TESTING
+      filter_expanded_no_match FOR TESTING
         RAISING zcx_abapgit_exception,
       filter_expanded_empty_wanted FOR TESTING
         RAISING zcx_abapgit_exception,
-      filter_expanded_keeps_dot_files FOR TESTING
+      filter_expanded_dot_files FOR TESTING
         RAISING zcx_abapgit_exception.
 
     METHODS build_tree_object
@@ -283,7 +283,7 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
 
   ENDMETHOD.
 
-  METHOD filter_expanded_removes_no_match.
+  METHOD filter_expanded_no_match.
     " filter_expanded removes non-matching entries and is case-insensitive
 
     DATA lt_expanded     TYPE zif_abapgit_git_definitions=>ty_expanded_tt.
@@ -349,7 +349,7 @@ CLASS ltcl_git_porcelain IMPLEMENTATION.
 
   ENDMETHOD.
 
-  METHOD filter_expanded_keeps_dot_files.
+  METHOD filter_expanded_dot_files.
     " filter_expanded always keeps root-level dot-files regardless of wanted list
 
     DATA lt_expanded     TYPE zif_abapgit_git_definitions=>ty_expanded_tt.
