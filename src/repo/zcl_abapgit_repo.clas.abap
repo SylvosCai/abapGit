@@ -255,6 +255,13 @@ CLASS zcl_abapgit_repo IMPLEMENTATION.
       lt_updated_files TYPE zif_abapgit_git_definitions=>ty_file_signatures_tt,
       lx_error         TYPE REF TO zcx_abapgit_exception.
 
+    " When a filter is provided, reset the remote cache so the subsequent
+    " get_files_remote( ii_obj_filter ) in zcl_abapgit_objects=>deserialize
+    " triggers a fresh filtered git fetch instead of reusing the full pack.
+    IF ii_obj_filter IS NOT INITIAL.
+      reset_remote( ).
+    ENDIF.
+
     TRY.
         lt_updated_files = zcl_abapgit_objects=>deserialize(
           ii_repo       = me
