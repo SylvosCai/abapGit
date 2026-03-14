@@ -147,8 +147,10 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
           mv_current_commit = lv_sha1.
         ENDIF.
 
-        lt_expanded = lo_v2->list_no_blobs( iv_url  = get_url( )
-                                            iv_sha1 = lv_sha1 ).
+        lt_expanded = lo_v2->list_trees_for_paths(
+          iv_url          = get_url( )
+          iv_sha1         = lv_sha1
+          it_wanted_paths = li_effective_filter->get_paths( ) ).
 
         " Narrow tree to only the files we need (+ root dot-files)
         zcl_abapgit_git_porcelain=>filter_expanded(

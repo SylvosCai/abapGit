@@ -6,4 +6,9 @@ INTERFACE zif_abapgit_object_filter
       VALUE(rt_filter) TYPE zif_abapgit_definitions=>ty_tadir_tt
     RAISING
       zcx_abapgit_exception.
+
+  METHODS get_paths
+    RETURNING
+      VALUE(rt_paths) TYPE string_table.
+
 ENDINTERFACE.
