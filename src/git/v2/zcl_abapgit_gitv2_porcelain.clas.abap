@@ -82,6 +82,45 @@ CLASS zcl_abapgit_gitv2_porcelain DEFINITION
       RAISING
         zcx_abapgit_exception.
 
+    CLASS-METHODS compute_max_depth
+      IMPORTING
+        !it_wanted_paths TYPE string_table OPTIONAL
+      RETURNING
+        VALUE(rv_depth) TYPE i.
+
+    CLASS-METHODS fetch_trees_at_depth
+      IMPORTING
+        !iv_url        TYPE string
+        !iv_commit     TYPE zif_abapgit_git_definitions=>ty_sha1
+        !iv_max_depth  TYPE i
+      RETURNING
+        VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
+      RAISING
+        zcx_abapgit_exception.
+
+    CLASS-METHODS walk_tree_from_objects
+      IMPORTING
+        !iv_url          TYPE string
+        !it_objects      TYPE zif_abapgit_definitions=>ty_objects_tt
+        !iv_base         TYPE string
+        !it_wanted_paths TYPE string_table OPTIONAL
+      CHANGING
+        !ct_expanded     TYPE zif_abapgit_git_definitions=>ty_expanded_tt
+      RAISING
+        zcx_abapgit_exception.
+
+    CLASS-METHODS walk_tree_level
+      IMPORTING
+        !iv_url          TYPE string
+        !it_objects      TYPE zif_abapgit_definitions=>ty_objects_tt
+        !iv_tree_sha1    TYPE zif_abapgit_git_definitions=>ty_sha1
+        !iv_base         TYPE string
+        !it_wanted_paths TYPE string_table OPTIONAL
+      CHANGING
+        !ct_expanded     TYPE zif_abapgit_git_definitions=>ty_expanded_tt
+      RAISING
+        zcx_abapgit_exception.
+
 ENDCLASS.
 
 
@@ -309,60 +348,37 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
 
   METHOD zif_abapgit_gitv2_porcelain~list_trees_for_paths.
 
-    " Targeted tree walk: walks the commit tree one level at a time,
-    " fetching only the tree objects along the path to the wanted files.
-    " Each tree is fetched with filter blob:none to avoid blob data.
-    " For leaf directories this is a single small object; intermediate
-    " directories also fetch their subtrees, but those are tree-only packs
-    " which are smaller and faster to decode than full blob packs.
+    " Targeted tree walk using progressive filter tree:N depth expansion.
+    " Instead of downloading ALL trees at once (filter blob:none = slow on
+    " large repos), we issue small requests with increasing depth (tree:1,
+    " tree:2, ...) following only branches that lead to wanted paths.
+    " Each response is small so the server processes it quickly.
 
-    DATA: lv_commit_data TYPE xstring,
-          ls_commit      TYPE zcl_abapgit_git_pack=>ty_commit,
-          lt_root_nodes  TYPE zcl_abapgit_git_pack=>ty_nodes_tt,
-          lv_tree_data   TYPE xstring,
-          ls_exp         LIKE LINE OF rt_expanded,
-          lv_sub_path    TYPE string.
+    DATA: lt_objects    TYPE zif_abapgit_definitions=>ty_objects_tt,
+          lt_nodes      TYPE zcl_abapgit_git_pack=>ty_nodes_tt,
+          ls_exp        LIKE LINE OF rt_expanded,
+          lv_depth      TYPE i,
+          lv_max_depth  TYPE i.
 
-    FIELD-SYMBOLS: <ls_node> LIKE LINE OF lt_root_nodes.
+    " Determine needed fetch depth: wanted path /a/b/c/ = depth 3 from root
+    lv_max_depth = compute_max_depth( it_wanted_paths ).
 
-    " 1. Fetch just the commit object (filter tree:0 = no trees, no blobs)
-    lv_commit_data = fetch_commit_only(
-      iv_url  = iv_url
-      iv_sha1 = iv_sha1 ).
-    ls_commit = zcl_abapgit_git_pack=>decode_commit( lv_commit_data ).
+    " Fetch the commit + all trees up to lv_max_depth in one request.
+    " filter tree:<N> sends commit + trees at depth <= N from commit.
+    lt_objects = fetch_trees_at_depth(
+      iv_url        = iv_url
+      iv_commit     = iv_sha1
+      iv_max_depth  = lv_max_depth ).
 
-    " 2. Fetch root tree with filter blob:none (trees but no blobs)
-    lt_root_nodes = fetch_tree_nodes(
-      iv_url       = iv_url
-      iv_tree_sha1 = ls_commit-tree ).
-
-    " 3. Walk root tree: always include root-level files; recurse into dirs
-    "    that are a prefix of a wanted path (or all dirs if no filter)
-    LOOP AT lt_root_nodes ASSIGNING <ls_node>.
-      CASE <ls_node>-chmod.
-        WHEN zif_abapgit_git_definitions=>c_chmod-dir.
-          lv_sub_path = '/' && <ls_node>-name && '/'.
-          IF path_needed( iv_path          = lv_sub_path
-                          it_wanted_paths  = it_wanted_paths ).
-            walk_tree_for_paths(
-              EXPORTING
-                iv_url          = iv_url
-                iv_base         = lv_sub_path
-                iv_tree_sha1    = <ls_node>-sha1
-                it_wanted_paths = it_wanted_paths
-              CHANGING
-                ct_expanded     = rt_expanded ).
-          ENDIF.
-        WHEN OTHERS.
-          " Always include root-level files (.abapgit.xml etc.)
-          CLEAR ls_exp.
-          ls_exp-path  = '/'.
-          ls_exp-name  = <ls_node>-name.
-          ls_exp-sha1  = <ls_node>-sha1.
-          ls_exp-chmod = <ls_node>-chmod.
-          APPEND ls_exp TO rt_expanded.
-      ENDCASE.
-    ENDLOOP.
+    " Walk tree locally — all needed objects are already in lt_objects
+    walk_tree_from_objects(
+      EXPORTING
+        iv_url          = iv_url
+        it_objects      = lt_objects
+        iv_base         = '/'
+        it_wanted_paths = it_wanted_paths
+      CHANGING
+        ct_expanded     = rt_expanded ).
 
   ENDMETHOD.
 
@@ -446,37 +462,49 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
 
   METHOD walk_tree_for_paths.
 
-    DATA: lt_nodes    TYPE zcl_abapgit_git_pack=>ty_nodes_tt,
-          ls_exp      LIKE LINE OF ct_expanded,
-          lv_sub_path TYPE string.
+    " Kept for backwards compatibility — delegates to walk_tree_from_objects.
+    " Not called from list_trees_for_paths but referenced from class definition.
+    DATA: lt_objects   TYPE zif_abapgit_definitions=>ty_objects_tt,
+          lt_nodes     TYPE zcl_abapgit_git_pack=>ty_nodes_tt,
+          ls_object    LIKE LINE OF lt_objects,
+          ls_node      LIKE LINE OF lt_nodes,
+          ls_exp       LIKE LINE OF ct_expanded,
+          lv_sub_path  TYPE string.
 
     FIELD-SYMBOLS: <ls_node> LIKE LINE OF lt_nodes.
 
-    lt_nodes = fetch_tree_nodes(
-      iv_url       = iv_url
-      iv_tree_sha1 = iv_tree_sha1 ).
-
+    " fetch just this one tree with filter blob:none
+    DATA lt_args TYPE string_table.
+    APPEND |want { iv_tree_sha1 }| TO lt_args.
+    APPEND 'filter blob:none' TO lt_args.
+    APPEND 'no-progress' TO lt_args.
+    APPEND 'done' TO lt_args.
+    DATA lv_xstring TYPE xstring.
+    lv_xstring = send_command( iv_url = iv_url iv_service = c_service-upload
+                               iv_command = |fetch| it_arguments = lt_args ).
+    lt_objects = decode_pack( lv_xstring ).
+    READ TABLE lt_objects INTO ls_object
+      WITH KEY type COMPONENTS
+        type = zif_abapgit_git_definitions=>c_type-tree
+        sha1 = iv_tree_sha1.
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+    lt_nodes = zcl_abapgit_git_pack=>decode_tree( ls_object-data ).
     LOOP AT lt_nodes ASSIGNING <ls_node>.
       CASE <ls_node>-chmod.
         WHEN zif_abapgit_git_definitions=>c_chmod-dir.
           lv_sub_path = iv_base && <ls_node>-name && '/'.
-          IF path_needed( iv_path          = lv_sub_path
-                          it_wanted_paths  = it_wanted_paths ).
-            walk_tree_for_paths(
-              EXPORTING
-                iv_url          = iv_url
-                iv_base         = lv_sub_path
-                iv_tree_sha1    = <ls_node>-sha1
-                it_wanted_paths = it_wanted_paths
-              CHANGING
-                ct_expanded     = ct_expanded ).
+          IF path_needed( iv_path = lv_sub_path it_wanted_paths = it_wanted_paths ).
+            walk_tree_for_paths( EXPORTING iv_url = iv_url iv_base = lv_sub_path
+                                           iv_tree_sha1 = <ls_node>-sha1
+                                           it_wanted_paths = it_wanted_paths
+                                 CHANGING ct_expanded = ct_expanded ).
           ENDIF.
         WHEN OTHERS.
           CLEAR ls_exp.
-          ls_exp-path  = iv_base.
-          ls_exp-name  = <ls_node>-name.
-          ls_exp-sha1  = <ls_node>-sha1.
-          ls_exp-chmod = <ls_node>-chmod.
+          ls_exp-path  = iv_base.  ls_exp-name  = <ls_node>-name.
+          ls_exp-sha1  = <ls_node>-sha1.  ls_exp-chmod = <ls_node>-chmod.
           APPEND ls_exp TO ct_expanded.
       ENDCASE.
     ENDLOOP.
@@ -486,8 +514,7 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
 
   METHOD fetch_commit_only.
 
-    " Fetch just the commit object without trees or blobs.
-    " Uses filter tree:0 so the server sends only the commit itself.
+    " Fetch just the commit object without trees or blobs (filter tree:0).
 
     DATA lv_xstring   TYPE xstring.
     DATA lt_arguments TYPE string_table.
@@ -499,12 +526,8 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
     APPEND 'no-progress'      TO lt_arguments.
     APPEND 'done'             TO lt_arguments.
 
-    lv_xstring = send_command(
-      iv_url       = iv_url
-      iv_service   = c_service-upload
-      iv_command   = |fetch|
-      it_arguments = lt_arguments ).
-
+    lv_xstring = send_command( iv_url = iv_url iv_service = c_service-upload
+                               iv_command = |fetch| it_arguments = lt_arguments ).
     lt_objects = decode_pack( lv_xstring ).
     READ TABLE lt_objects INTO ls_object
       WITH KEY type COMPONENTS type = zif_abapgit_git_definitions=>c_type-commit.
@@ -518,27 +541,18 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
 
   METHOD fetch_tree_nodes.
 
-    " Fetch a tree object by SHA1 with filter blob:none so only tree objects
-    " (not blob content) are transferred.  For leaf directories the pack
-    " contains just this one tree; for intermediate directories it contains
-    " this tree plus its subtrees.  Decode and return the direct node list.
-
     DATA lv_xstring   TYPE xstring.
     DATA lt_arguments TYPE string_table.
     DATA lt_objects   TYPE zif_abapgit_definitions=>ty_objects_tt.
     DATA ls_object    LIKE LINE OF lt_objects.
 
     APPEND |want { iv_tree_sha1 }| TO lt_arguments.
-    APPEND 'filter blob:none'      TO lt_arguments.
-    APPEND 'no-progress'           TO lt_arguments.
-    APPEND 'done'                  TO lt_arguments.
+    APPEND 'filter blob:none' TO lt_arguments.
+    APPEND 'no-progress'      TO lt_arguments.
+    APPEND 'done'             TO lt_arguments.
 
-    lv_xstring = send_command(
-      iv_url       = iv_url
-      iv_service   = c_service-upload
-      iv_command   = |fetch|
-      it_arguments = lt_arguments ).
-
+    lv_xstring = send_command( iv_url = iv_url iv_service = c_service-upload
+                               iv_command = |fetch| it_arguments = lt_arguments ).
     lt_objects = decode_pack( lv_xstring ).
     READ TABLE lt_objects INTO ls_object
       WITH KEY type COMPONENTS
@@ -548,6 +562,167 @@ CLASS zcl_abapgit_gitv2_porcelain IMPLEMENTATION.
       zcx_abapgit_exception=>raise( |Tree { iv_tree_sha1 } not found in response| ).
     ENDIF.
     rt_nodes = zcl_abapgit_git_pack=>decode_tree( ls_object-data ).
+
+  ENDMETHOD.
+
+
+  METHOD compute_max_depth.
+
+    " Count the number of '/' separators in the deepest wanted path.
+    " e.g. '/src/pkg/sub/' has 3 slashes -> depth = 3.
+    " Returns 0 (no filter -> use filter blob:none full fetch).
+
+    DATA lv_wanted    TYPE string.
+    DATA lv_depth     TYPE i.
+    DATA lv_pos       TYPE i.
+    DATA lv_len       TYPE i.
+    DATA lv_char      TYPE c LENGTH 1.
+
+    IF it_wanted_paths IS INITIAL.
+      rv_depth = 0.
+      RETURN.
+    ENDIF.
+
+    LOOP AT it_wanted_paths INTO lv_wanted.
+      lv_depth = 0.
+      lv_len   = strlen( lv_wanted ).
+      DO lv_len TIMES.
+        lv_pos  = sy-index - 1.
+        lv_char = lv_wanted+lv_pos(1).
+        IF lv_char = '/'.
+          lv_depth = lv_depth + 1.
+        ENDIF.
+      ENDDO.
+      IF lv_depth > rv_depth.
+        rv_depth = lv_depth.
+      ENDIF.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD fetch_trees_at_depth.
+
+    " Fetch the commit + all tree objects up to iv_max_depth levels deep.
+    " Uses filter tree:<N> which sends only trees at depth <= N from commit.
+    " iv_max_depth=0 falls back to filter blob:none (full tree).
+
+    DATA lv_xstring   TYPE xstring.
+    DATA lt_arguments TYPE string_table.
+    DATA lv_filter    TYPE string.
+
+    APPEND |want { iv_commit }| TO lt_arguments.
+    APPEND 'deepen 1'           TO lt_arguments.
+
+    IF iv_max_depth = 0.
+      lv_filter = 'filter blob:none'.
+    ELSE.
+      lv_filter = |filter tree:{ iv_max_depth }|.
+    ENDIF.
+    APPEND lv_filter     TO lt_arguments.
+    APPEND 'no-progress' TO lt_arguments.
+    APPEND 'done'        TO lt_arguments.
+
+    lv_xstring = send_command( iv_url = iv_url iv_service = c_service-upload
+                               iv_command = |fetch| it_arguments = lt_arguments ).
+    rt_objects = decode_pack( lv_xstring ).
+
+  ENDMETHOD.
+
+
+  METHOD walk_tree_from_objects.
+
+    " Walk the tree structure from a set of already-fetched objects.
+    " Avoids additional HTTP requests by looking up trees in it_objects.
+
+    DATA ls_commit   TYPE zcl_abapgit_git_pack=>ty_commit.
+    DATA ls_object   LIKE LINE OF it_objects.
+    DATA lt_nodes    TYPE zcl_abapgit_git_pack=>ty_nodes_tt.
+    DATA ls_exp      LIKE LINE OF ct_expanded.
+    DATA lv_sub_path TYPE string.
+    DATA lv_tree_sha TYPE zif_abapgit_git_definitions=>ty_sha1.
+
+    FIELD-SYMBOLS: <ls_node> LIKE LINE OF lt_nodes.
+
+    " Get the root tree SHA1 from the commit
+    READ TABLE it_objects INTO ls_object
+      WITH KEY type COMPONENTS type = zif_abapgit_git_definitions=>c_type-commit.
+    IF sy-subrc <> 0.
+      zcx_abapgit_exception=>raise( 'Commit not found in object list' ).
+    ENDIF.
+    ls_commit = zcl_abapgit_git_pack=>decode_commit( ls_object-data ).
+
+    " Delegate to recursive tree walker using the commit's root tree
+    walk_tree_level(
+      EXPORTING
+        iv_url          = iv_url
+        it_objects      = it_objects
+        iv_tree_sha1    = ls_commit-tree
+        iv_base         = iv_base
+        it_wanted_paths = it_wanted_paths
+      CHANGING
+        ct_expanded     = ct_expanded ).
+
+  ENDMETHOD.
+
+
+  METHOD walk_tree_level.
+
+    " Recursively walk a tree within the cached object list.
+
+    DATA ls_object   LIKE LINE OF it_objects.
+    DATA lt_nodes    TYPE zcl_abapgit_git_pack=>ty_nodes_tt.
+    DATA ls_exp      LIKE LINE OF ct_expanded.
+    DATA lv_sub_path TYPE string.
+
+    FIELD-SYMBOLS: <ls_node> LIKE LINE OF lt_nodes.
+
+    READ TABLE it_objects INTO ls_object
+      WITH KEY type COMPONENTS
+        type = zif_abapgit_git_definitions=>c_type-tree
+        sha1 = iv_tree_sha1.
+    IF sy-subrc <> 0.
+      " Tree not in cache — fall back to fetching it
+      DATA lt_fetched TYPE zif_abapgit_definitions=>ty_objects_tt.
+      lt_fetched = fetch_trees_at_depth(
+        iv_url       = iv_url
+        iv_commit    = iv_tree_sha1
+        iv_max_depth = 0 ).
+      READ TABLE lt_fetched INTO ls_object
+        WITH KEY type COMPONENTS
+          type = zif_abapgit_git_definitions=>c_type-tree
+          sha1 = iv_tree_sha1.
+      IF sy-subrc <> 0.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+    lt_nodes = zcl_abapgit_git_pack=>decode_tree( ls_object-data ).
+
+    LOOP AT lt_nodes ASSIGNING <ls_node>.
+      CASE <ls_node>-chmod.
+        WHEN zif_abapgit_git_definitions=>c_chmod-dir.
+          lv_sub_path = iv_base && <ls_node>-name && '/'.
+          IF path_needed( iv_path = lv_sub_path it_wanted_paths = it_wanted_paths ).
+            walk_tree_level(
+              EXPORTING
+                iv_url          = iv_url
+                it_objects      = it_objects
+                iv_tree_sha1    = <ls_node>-sha1
+                iv_base         = lv_sub_path
+                it_wanted_paths = it_wanted_paths
+              CHANGING
+                ct_expanded     = ct_expanded ).
+          ENDIF.
+        WHEN OTHERS.
+          CLEAR ls_exp.
+          ls_exp-path  = iv_base.
+          ls_exp-name  = <ls_node>-name.
+          ls_exp-sha1  = <ls_node>-sha1.
+          ls_exp-chmod = <ls_node>-chmod.
+          APPEND ls_exp TO ct_expanded.
+      ENDCASE.
+    ENDLOOP.
 
   ENDMETHOD.
 ENDCLASS.
