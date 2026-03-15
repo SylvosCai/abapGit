@@ -575,7 +575,12 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
 
   METHOD zif_abapgit_repo~deserialize_checks.
-    reset_remote( ).
+    " Use select_branch rather than reset_remote so that any stale selected_commit
+    " (e.g. set via the abapGit UI) is cleared before deserialise_checks runs.
+    " A non-initial selected_commit causes fetch_remote to call pull_by_commit with
+    " an old SHA-1, making calculate() see lt_remote = already-activated state and
+    " skip activation entirely (LOG_MESSAGES stays empty, SUCCESS = X, no work done).
+    select_branch( get_selected_branch( ) ).
     rs_checks = super->deserialize_checks( ii_obj_filter ).
   ENDMETHOD.
 
