@@ -10,23 +10,27 @@ CLASS zcl_abapgit_git_transport DEFINITION
 * remote to local
     CLASS-METHODS upload_pack_by_branch
       IMPORTING
-        !iv_url          TYPE string
-        !iv_branch_name  TYPE string
-        !iv_deepen_level TYPE i DEFAULT 1
-        !it_branches     TYPE zif_abapgit_git_definitions=>ty_git_branch_list_tt OPTIONAL
+        !iv_url             TYPE string
+        !iv_branch_name     TYPE string
+        !iv_deepen_level    TYPE i DEFAULT 1
+        !it_branches        TYPE zif_abapgit_git_definitions=>ty_git_branch_list_tt OPTIONAL
+        !iv_filter          TYPE string OPTIONAL
       EXPORTING
-        !et_objects      TYPE zif_abapgit_definitions=>ty_objects_tt
-        !ev_branch       TYPE zif_abapgit_git_definitions=>ty_sha1
+        !et_objects         TYPE zif_abapgit_definitions=>ty_objects_tt
+        !ev_branch          TYPE zif_abapgit_git_definitions=>ty_sha1
+        !ev_filter_applied  TYPE abap_bool
       RAISING
         zcx_abapgit_exception .
     CLASS-METHODS upload_pack_by_commit
       IMPORTING
-        !iv_url          TYPE string
-        !iv_hash         TYPE zif_abapgit_git_definitions=>ty_sha1 OPTIONAL
-        !iv_deepen_level TYPE i DEFAULT 0
+        !iv_url             TYPE string
+        !iv_hash            TYPE zif_abapgit_git_definitions=>ty_sha1 OPTIONAL
+        !iv_deepen_level    TYPE i DEFAULT 0
+        !iv_filter          TYPE string OPTIONAL
       EXPORTING
-        !et_objects      TYPE zif_abapgit_definitions=>ty_objects_tt
-        !ev_commit       TYPE zif_abapgit_git_definitions=>ty_sha1
+        !et_objects         TYPE zif_abapgit_definitions=>ty_objects_tt
+        !ev_commit          TYPE zif_abapgit_git_definitions=>ty_sha1
+        !ev_filter_applied  TYPE abap_bool
       RAISING
         zcx_abapgit_exception .
 * local to remote
@@ -44,6 +48,14 @@ CLASS zcl_abapgit_git_transport DEFINITION
         iv_url                TYPE string
       RETURNING
         VALUE(ri_branch_list) TYPE REF TO zif_abapgit_git_branch_list
+      RAISING
+        zcx_abapgit_exception .
+    CLASS-METHODS upload_pack_blobs
+      IMPORTING
+        !iv_url           TYPE string
+        !it_hashes        TYPE zif_abapgit_git_definitions=>ty_sha1_tt
+      RETURNING
+        VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
       RAISING
         zcx_abapgit_exception .
 
@@ -103,6 +115,7 @@ CLASS zcl_abapgit_git_transport DEFINITION
         !iv_url           TYPE string
         !iv_deepen_level  TYPE i DEFAULT 0
         !it_hashes        TYPE zif_abapgit_git_definitions=>ty_sha1_tt
+        !iv_filter        TYPE string OPTIONAL
       RETURNING
         VALUE(rt_objects) TYPE zif_abapgit_definitions=>ty_objects_tt
       RAISING
@@ -363,6 +376,9 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
     LOOP AT it_hashes FROM 1 ASSIGNING <lv_hash>.
       IF sy-tabix = 1.
         lv_capa = 'side-band-64k no-progress multi_ack'.
+        IF iv_filter IS NOT INITIAL.
+          lv_capa = lv_capa && ' filter'.
+        ENDIF.
         lv_line = 'want' && ` ` && <lv_hash>
           && ` ` && lv_capa && cl_abap_char_utilities=>newline.
       ELSE.
@@ -375,6 +391,11 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
     IF iv_deepen_level > 0.
       lv_buffer = lv_buffer && zcl_abapgit_git_utils=>pkt_string( |deepen { iv_deepen_level }| &&
         cl_abap_char_utilities=>newline ).
+    ENDIF.
+
+    IF iv_filter IS NOT INITIAL.
+      lv_buffer = lv_buffer && zcl_abapgit_git_utils=>pkt_string(
+        |filter { iv_filter }| && cl_abap_char_utilities=>newline ).
     ENDIF.
 
     lv_buffer = lv_buffer
@@ -397,14 +418,17 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
 
   METHOD upload_pack_by_branch.
 
-    DATA: lo_client TYPE REF TO zcl_abapgit_http_client,
-          lt_hashes TYPE zif_abapgit_git_definitions=>ty_sha1_tt.
+    DATA: lo_client       TYPE REF TO zcl_abapgit_http_client,
+          lt_hashes       TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
+          li_branch_list  TYPE REF TO zif_abapgit_git_branch_list,
+          lv_filter       TYPE string.
 
     FIELD-SYMBOLS: <ls_branch> LIKE LINE OF it_branches.
 
 
     CLEAR: et_objects,
-           ev_branch.
+           ev_branch,
+           ev_filter_applied.
 
     find_branch(
       EXPORTING
@@ -413,7 +437,13 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
         iv_branch_name = iv_branch_name
       IMPORTING
         eo_client      = lo_client
-        ev_branch      = ev_branch ).
+        ev_branch      = ev_branch
+        ei_branch_list = li_branch_list ).
+
+    IF iv_filter IS NOT INITIAL AND li_branch_list->get_capabilities( ) CS 'filter'.
+      lv_filter          = iv_filter.
+      ev_filter_applied  = abap_true.
+    ENDIF.
 
     IF it_branches IS INITIAL.
       APPEND ev_branch TO lt_hashes.
@@ -426,7 +456,8 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
     et_objects = upload_pack( io_client       = lo_client
                               iv_url          = iv_url
                               iv_deepen_level = iv_deepen_level
-                              it_hashes       = lt_hashes ).
+                              it_hashes       = lt_hashes
+                              iv_filter       = lv_filter ).
 
   ENDMETHOD.
 
@@ -439,7 +470,8 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
     DATA ls_header  LIKE LINE OF lt_headers.
 
     CLEAR: et_objects,
-           ev_commit.
+           ev_commit,
+           ev_filter_applied.
 
     APPEND iv_hash TO lt_hashes.
     ev_commit = iv_hash.
@@ -453,10 +485,33 @@ CLASS zcl_abapgit_git_transport IMPLEMENTATION.
       iv_url     = iv_url
       it_headers = lt_headers ).
 
+    " No capability check available for commit-pinned pulls → full fetch only
     et_objects = upload_pack( io_client       = lo_client
                               iv_url          = iv_url
                               iv_deepen_level = iv_deepen_level
                               it_hashes       = lt_hashes ).
+
+  ENDMETHOD.
+
+
+  METHOD upload_pack_blobs.
+
+    DATA lt_headers TYPE zcl_abapgit_http=>ty_headers.
+    DATA ls_header  LIKE LINE OF lt_headers.
+    DATA lo_client  TYPE REF TO zcl_abapgit_http_client.
+
+    ls_header-key   = '~request_uri'.
+    ls_header-value = get_request_uri( iv_url     = iv_url
+                                       iv_service = c_service-upload ).
+    APPEND ls_header TO lt_headers.
+
+    lo_client = zcl_abapgit_http=>create_by_url(
+      iv_url     = iv_url
+      it_headers = lt_headers ).
+
+    rt_objects = upload_pack( io_client = lo_client
+                              iv_url    = iv_url
+                              it_hashes = it_hashes ).
 
   ENDMETHOD.
 

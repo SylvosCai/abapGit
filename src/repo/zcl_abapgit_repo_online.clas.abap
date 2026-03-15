@@ -28,6 +28,8 @@ CLASS zcl_abapgit_repo_online DEFINITION
         REDEFINITION .
     METHODS zif_abapgit_repo~has_remote_source
         REDEFINITION .
+    METHODS zif_abapgit_repo~deserialize_checks
+        REDEFINITION .
     METHODS constructor
       IMPORTING
         is_data TYPE zif_abapgit_persistence=>ty_repo.
@@ -37,6 +39,7 @@ CLASS zcl_abapgit_repo_online DEFINITION
 
     DATA mt_objects TYPE zif_abapgit_definitions=>ty_objects_tt .
     DATA mv_current_commit TYPE zif_abapgit_git_definitions=>ty_sha1 .
+    DATA mi_pending_obj_filter TYPE REF TO zif_abapgit_object_filter .
 
     METHODS handle_stage_ignore
       IMPORTING
@@ -49,6 +52,8 @@ CLASS zcl_abapgit_repo_online DEFINITION
       RAISING
         zcx_abapgit_exception .
     METHODS fetch_remote
+      IMPORTING
+        !ii_obj_filter TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RAISING
         zcx_abapgit_exception .
     METHODS get_objects
@@ -77,27 +82,101 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress TYPE REF TO zif_abapgit_progress,
-          ls_pull     TYPE zcl_abapgit_git_porcelain=>ty_pull_result.
+    DATA: li_progress      TYPE REF TO zif_abapgit_progress,
+          ls_pull          TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lv_filter        TYPE string,
+          lt_tadir         TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          lt_files         TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_keep          TYPE zif_abapgit_git_definitions=>ty_files_tt,
+          lt_wanted_files  TYPE string_table,
+          ls_item          TYPE zif_abapgit_definitions=>ty_item,
+          lo_dot           TYPE REF TO zcl_abapgit_dot_abapgit.
+
+    FIELD-SYMBOLS: <ls_file>  LIKE LINE OF lt_files,
+                   <ls_tadir> LIKE LINE OF lt_tadir.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
     ENDIF.
+
+    " If no explicit filter was passed but one was stored by deserialize_checks,
+    " use it so the first fetch (triggered by find_remote_dot_abapgit) applies
+    " the partial-blob optimisation instead of doing a full download.
+    DATA(li_effective_filter) = COND #( WHEN ii_obj_filter IS NOT INITIAL
+                                        THEN ii_obj_filter
+                                        ELSE mi_pending_obj_filter ).
+    CLEAR mi_pending_obj_filter.
 
     li_progress = zcl_abapgit_progress=>get_instance( 1 ).
 
     li_progress->show( iv_current = 1
                        iv_text    = 'Fetch remote files' ).
 
-    IF get_selected_commit( ) IS INITIAL.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch( iv_url         = get_url( )
-                                                           iv_branch_name = get_selected_branch( ) ).
-    ELSE.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit( iv_url         = get_url( )
-                                                           iv_commit_hash = get_selected_commit( ) ).
+    IF li_effective_filter IS NOT INITIAL.
+      lv_filter = 'blob:none'.
+
+      " Build list of expected filenames from the requested objects
+      " using a lowercase obj_name prefix (e.g. 'zcl_myclass.')
+      lt_tadir = li_effective_filter->get_filter( ).
+      LOOP AT lt_tadir ASSIGNING <ls_tadir>.
+        APPEND to_lower( <ls_tadir>-obj_name ) && '.' TO lt_wanted_files.
+      ENDLOOP.
     ENDIF.
 
-    set_files_remote( ls_pull-files ).
+    IF get_selected_commit( ) IS INITIAL.
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
+        iv_url          = get_url( )
+        iv_branch_name  = get_selected_branch( )
+        iv_filter       = lv_filter
+        it_wanted_files = lt_wanted_files ).
+    ELSE.
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
+        iv_url          = get_url( )
+        iv_commit_hash  = get_selected_commit( )
+        iv_filter       = lv_filter
+        it_wanted_files = lt_wanted_files ).
+    ENDIF.
+
+    IF li_effective_filter IS NOT INITIAL AND lv_filter IS NOT INITIAL.
+      " Two-phase path: ls_pull-files contains stubs for requested files + their blob data.
+      " Filter to keep only requested objects + root dot-files.
+      lo_dot = get_dot_abapgit( ).
+
+      lt_files = ls_pull-files.
+      LOOP AT lt_files ASSIGNING <ls_file>.
+        " Always keep root-level dot-files (.abapgit.xml, .apack-manifest.yml, etc.)
+        IF <ls_file>-path = zif_abapgit_definitions=>c_root_dir
+            AND <ls_file>-filename+0(1) = '.'.
+          APPEND <ls_file> TO lt_keep.
+          CONTINUE.
+        ENDIF.
+
+        " Keep files that belong to a requested object
+        TRY.
+            zcl_abapgit_filename_logic=>file_to_object(
+              EXPORTING
+                iv_filename = <ls_file>-filename
+                iv_path     = <ls_file>-path
+                io_dot      = lo_dot
+              IMPORTING
+                es_item     = ls_item ).
+          CATCH zcx_abapgit_exception.
+            CONTINUE.
+        ENDTRY.
+
+        READ TABLE lt_tadir TRANSPORTING NO FIELDS
+          WITH KEY object   = ls_item-obj_type
+                   obj_name = ls_item-obj_name.
+        IF sy-subrc = 0.
+          APPEND <ls_file> TO lt_keep.
+        ENDIF.
+      ENDLOOP.
+
+      set_files_remote( lt_keep ).
+    ELSE.
+      set_files_remote( ls_pull-files ).
+    ENDIF.
+
     set_objects( ls_pull-objects ).
     mv_current_commit = ls_pull-commit.
 
@@ -414,7 +493,7 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
 
   METHOD zif_abapgit_repo~get_files_remote.
-    fetch_remote( ).
+    fetch_remote( ii_obj_filter ).
     rt_files = super->get_files_remote(
       ii_obj_filter   = ii_obj_filter
       iv_ignore_files = iv_ignore_files ).
@@ -437,4 +516,16 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
   METHOD zif_abapgit_repo~has_remote_source.
     rv_yes = abap_true.
   ENDMETHOD.
+
+
+  METHOD zif_abapgit_repo~deserialize_checks.
+    " Store the filter so the first fetch_remote call (triggered by
+    " find_remote_dot_abapgit inside super->deserialize_checks) uses it.
+    " Without this, find_remote_dot_abapgit calls get_files_remote with no
+    " filter, causing a full pack download before the filter can be applied.
+    mi_pending_obj_filter = ii_obj_filter.
+    reset_remote( ).
+    rs_checks = super->deserialize_checks( ii_obj_filter ).
+  ENDMETHOD.
+
 ENDCLASS.
