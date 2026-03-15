@@ -194,4 +194,9 @@ CLASS zcl_abapgit_object_filter_tran IMPLEMENTATION.
   METHOD zif_abapgit_object_filter~get_filter.
     rt_filter = mt_filter.
   ENDMETHOD.
+
+  METHOD zif_abapgit_object_filter~get_paths.
+    " Transport filter has no directory path hints
+    CLEAR rt_paths.
+  ENDMETHOD.
 ENDCLASS.

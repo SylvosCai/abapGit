@@ -1,3 +1,29 @@
+CLASS ltcl_get_paths DEFINITION FINAL FOR TESTING
+  DURATION SHORT
+  RISK LEVEL HARMLESS.
+
+  PRIVATE SECTION.
+    METHODS get_paths_is_empty FOR TESTING RAISING cx_static_check.
+
+ENDCLASS.
+
+CLASS ltcl_get_paths IMPLEMENTATION.
+
+  METHOD get_paths_is_empty.
+
+    DATA lo_cut TYPE REF TO zcl_abapgit_object_filter_tran.
+
+    CREATE OBJECT lo_cut.
+
+    cl_abap_unit_assert=>assert_initial(
+      act = lo_cut->zif_abapgit_object_filter~get_paths( )
+      msg = 'Transport filter should return no path hints' ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+
 CLASS ltcl_adjust_filter DEFINITION FINAL FOR TESTING INHERITING FROM zcl_abapgit_object_filter_tran
   DURATION SHORT
   RISK LEVEL HARMLESS.
