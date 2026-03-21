@@ -28,6 +28,10 @@ CLASS zcl_abapgit_repo_online DEFINITION
         REDEFINITION .
     METHODS zif_abapgit_repo~has_remote_source
         REDEFINITION .
+    METHODS zif_abapgit_repo~find_remote_dot_abapgit
+        REDEFINITION .
+    METHODS zif_abapgit_repo~deserialize_checks
+        REDEFINITION .
     METHODS constructor
       IMPORTING
         is_data TYPE zif_abapgit_persistence=>ty_repo.
@@ -49,6 +53,8 @@ CLASS zcl_abapgit_repo_online DEFINITION
       RAISING
         zcx_abapgit_exception .
     METHODS fetch_remote
+      IMPORTING
+        !ii_obj_filter TYPE REF TO zif_abapgit_object_filter OPTIONAL
       RAISING
         zcx_abapgit_exception .
     METHODS get_objects
@@ -77,11 +83,20 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
   METHOD fetch_remote.
 
-    DATA: li_progress TYPE REF TO zif_abapgit_progress,
-          ls_pull     TYPE zcl_abapgit_git_porcelain=>ty_pull_result.
+    DATA: li_progress         TYPE REF TO zif_abapgit_progress,
+          ls_pull             TYPE zcl_abapgit_git_porcelain=>ty_pull_result,
+          lt_tadir            TYPE zif_abapgit_definitions=>ty_tadir_tt,
+          lt_wanted_files     TYPE string_table,
+          li_effective_filter TYPE REF TO zif_abapgit_object_filter.
+
+    FIELD-SYMBOLS: <ls_tadir> LIKE LINE OF lt_tadir.
 
     IF mv_request_remote_refresh = abap_false.
       RETURN.
+    ENDIF.
+
+    IF ii_obj_filter IS NOT INITIAL.
+      li_effective_filter = ii_obj_filter.
     ENDIF.
 
     li_progress = zcl_abapgit_progress=>get_instance( 1 ).
@@ -89,12 +104,99 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
     li_progress->show( iv_current = 1
                        iv_text    = 'Fetch remote files' ).
 
+    IF li_effective_filter IS NOT INITIAL.
+      " Build filename prefix list from filter — git layer needs string prefixes,
+      " not ABAP object types. Filenames follow <obj_name_lower>.<obj_type_lower>.*
+      lt_tadir = li_effective_filter->get_filter( ).
+      LOOP AT lt_tadir ASSIGNING <ls_tadir>.
+        APPEND to_lower( <ls_tadir>-obj_name ) && '.' TO lt_wanted_files.
+      ENDLOOP.
+    ENDIF.
+
+    " When a filter is active and the server supports partial clone (filter capability),
+    " use a two-phase gitv2 fetch: Phase 1 lists tree entries without blob content,
+    " Phase 2 fetches only the blobs we actually need.  This avoids downloading the
+    " full pack for large repositories when only a handful of objects are requested.
+    IF li_effective_filter IS NOT INITIAL.
+
+      DATA: lo_v2        TYPE REF TO zif_abapgit_gitv2_porcelain,
+            li_branches  TYPE REF TO zif_abapgit_git_branch_list,
+            lt_expanded  TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
+            lt_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1_tt,
+            lt_blobs     TYPE zif_abapgit_definitions=>ty_objects_tt,
+            lv_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1,
+            ls_blob      LIKE LINE OF lt_blobs,
+            ls_file      TYPE zif_abapgit_git_definitions=>ty_file,
+            lt_files     TYPE zif_abapgit_git_definitions=>ty_files_tt.
+
+      FIELD-SYMBOLS: <ls_exp> LIKE LINE OF lt_expanded,
+                     <lv_sha1> LIKE LINE OF lt_sha1.
+
+      li_branches = zcl_abapgit_git_factory=>get_git_transport( )->branches( get_url( ) ).
+
+      IF li_branches->get_capabilities( ) CS 'filter'.
+
+        " Phase 1: fetch tree structure without blob content
+        lo_v2 = zcl_abapgit_git_factory=>get_v2_porcelain( ).
+
+        IF get_selected_commit( ) IS INITIAL.
+          lv_sha1 = li_branches->find_by_name( get_selected_branch( ) )-sha1.
+          mv_current_commit = lv_sha1.
+        ELSE.
+          lv_sha1 = get_selected_commit( ).
+          mv_current_commit = lv_sha1.
+        ENDIF.
+
+        lt_expanded = lo_v2->list_trees_for_paths(
+          iv_url          = get_url( )
+          iv_sha1         = lv_sha1
+          it_wanted_paths = li_effective_filter->get_paths( ) ).
+
+        " Narrow tree to only the files we need (+ root dot-files)
+        zcl_abapgit_git_porcelain=>filter_expanded(
+          EXPORTING it_wanted_files = lt_wanted_files
+          CHANGING  ct_expanded     = lt_expanded ).
+
+        " Phase 2: fetch only the required blobs by SHA1
+        LOOP AT lt_expanded ASSIGNING <ls_exp>.
+          APPEND <ls_exp>-sha1 TO lt_sha1.
+        ENDLOOP.
+
+        lt_blobs = lo_v2->fetch_blobs( iv_url  = get_url( )
+                                       it_sha1 = lt_sha1 ).
+
+        " Assemble files from expanded tree + fetched blobs
+        LOOP AT lt_expanded ASSIGNING <ls_exp>.
+          READ TABLE lt_blobs INTO ls_blob
+            WITH KEY sha1 = <ls_exp>-sha1.
+          CLEAR ls_file.
+          ls_file-path     = <ls_exp>-path.
+          ls_file-filename = <ls_exp>-name.
+          IF sy-subrc = 0.
+            ls_file-data = ls_blob-data.
+            ls_file-sha1 = ls_blob-sha1.
+          ENDIF.
+          APPEND ls_file TO lt_files.
+        ENDLOOP.
+
+        set_files_remote( lt_files ).
+        set_objects( lt_blobs ).
+        RETURN.
+
+      ENDIF.
+
+    ENDIF.
+
     IF get_selected_commit( ) IS INITIAL.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch( iv_url         = get_url( )
-                                                           iv_branch_name = get_selected_branch( ) ).
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_branch(
+        iv_url          = get_url( )
+        iv_branch_name  = get_selected_branch( )
+        it_wanted_files = lt_wanted_files ).
     ELSE.
-      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit( iv_url         = get_url( )
-                                                           iv_commit_hash = get_selected_commit( ) ).
+      ls_pull = zcl_abapgit_git_porcelain=>pull_by_commit(
+        iv_url          = get_url( )
+        iv_commit_hash  = get_selected_commit( )
+        it_wanted_files = lt_wanted_files ).
     ENDIF.
 
     set_files_remote( ls_pull-files ).
@@ -414,7 +516,7 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
 
 
   METHOD zif_abapgit_repo~get_files_remote.
-    fetch_remote( ).
+    fetch_remote( ii_obj_filter ).
     rt_files = super->get_files_remote(
       ii_obj_filter   = ii_obj_filter
       iv_ignore_files = iv_ignore_files ).
@@ -437,4 +539,49 @@ CLASS zcl_abapgit_repo_online IMPLEMENTATION.
   METHOD zif_abapgit_repo~has_remote_source.
     rv_yes = abap_true.
   ENDMETHOD.
+
+
+  METHOD zif_abapgit_repo~find_remote_dot_abapgit.
+
+    DATA: lo_v2        TYPE REF TO zif_abapgit_gitv2_porcelain,
+          li_branches  TYPE REF TO zif_abapgit_git_branch_list,
+          lt_expanded  TYPE zif_abapgit_git_definitions=>ty_expanded_tt,
+          ls_dot_entry LIKE LINE OF lt_expanded,
+          lv_sha1      TYPE zif_abapgit_git_definitions=>ty_sha1,
+          lv_data      TYPE xstring.
+
+    " Cheap SHA1 lookup via info/refs (no pack download)
+    li_branches = zcl_abapgit_git_factory=>get_git_transport( )->branches( get_url( ) ).
+    lv_sha1 = li_branches->find_by_name( get_selected_branch( ) )-sha1.
+
+    " Phase 1: get tree structure without blobs
+    lo_v2 = zcl_abapgit_git_factory=>get_v2_porcelain( ).
+    lt_expanded = lo_v2->list_no_blobs( iv_url  = get_url( )
+                                        iv_sha1 = lv_sha1 ).
+
+    " Find .abapgit.xml at root
+    READ TABLE lt_expanded INTO ls_dot_entry
+      WITH KEY path = zif_abapgit_definitions=>c_root_dir
+               name = zif_abapgit_definitions=>c_dot_abapgit.
+    IF sy-subrc = 0.
+      lv_data = lo_v2->fetch_blob( iv_url  = get_url( )
+                                   iv_sha1 = ls_dot_entry-sha1 ).
+      ro_dot = zcl_abapgit_dot_abapgit=>deserialize( lv_data ).
+      set_dot_abapgit( ro_dot ).
+      COMMIT WORK AND WAIT.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD zif_abapgit_repo~deserialize_checks.
+    " Use select_branch rather than reset_remote so that any stale selected_commit
+    " (e.g. set via the abapGit UI) is cleared before deserialise_checks runs.
+    " A non-initial selected_commit causes fetch_remote to call pull_by_commit with
+    " an old SHA-1, making calculate() see lt_remote = already-activated state and
+    " skip activation entirely (LOG_MESSAGES stays empty, SUCCESS = X, no work done).
+    select_branch( get_selected_branch( ) ).
+    rs_checks = super->deserialize_checks( ii_obj_filter ).
+  ENDMETHOD.
+
 ENDCLASS.
