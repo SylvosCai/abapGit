@@ -205,6 +205,7 @@ CLASS zcl_abapgit_object_enho_hook IMPLEMENTATION.
                 enhtype               = cl_abstract_enh_tool_redef=>credefinition
                 enhtooltype           = cl_enh_tool_hook_impl=>tooltype
                 abap_language_version = mv_abap_language_version " not on lower releases
+                dark                  = abap_true
               IMPORTING
                 enhancement           = li_tool
               CHANGING
@@ -215,6 +216,7 @@ CLASS zcl_abapgit_object_enho_hook IMPLEMENTATION.
                 enhname     = lv_enhname
                 enhtype     = cl_abstract_enh_tool_redef=>credefinition
                 enhtooltype = cl_enh_tool_hook_impl=>tooltype
+                dark        = abap_true
               IMPORTING
                 enhancement = li_tool
               CHANGING
