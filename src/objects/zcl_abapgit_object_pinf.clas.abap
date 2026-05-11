@@ -89,6 +89,7 @@ CLASS zcl_abapgit_object_pinf IMPLEMENTATION.
           i_pkg_interface_name    = is_pinf-attributes-intf_name
           i_publisher_pkg_name    = lv_pkg_interface_data-pack_name
           i_pkg_interface_data    = lv_pkg_interface_data
+          i_suppress_dialog       = abap_true
         IMPORTING
           e_package_interface     = li_interface
         EXCEPTIONS
@@ -174,8 +175,6 @@ CLASS zcl_abapgit_object_pinf IMPLEMENTATION.
       is_data_sign              = ls_sign ).
 
     set_default_package( iv_package ).
-* looks like setting "i_suppress_dialog = abap_true" will make
-* it fail for local($) packages
     ii_interface->save( ).
 
     ii_interface->set_changeable( abap_false ).
@@ -271,6 +270,9 @@ CLASS zcl_abapgit_object_pinf IMPLEMENTATION.
 
     "needed for update_attributes
     ls_pinf-attributes-tadir_devc = iv_package.
+
+    set_default_package( iv_package ).
+    set_default_transport( iv_transport ).
 
     li_interface = create_or_load(
       is_pinf    = ls_pinf

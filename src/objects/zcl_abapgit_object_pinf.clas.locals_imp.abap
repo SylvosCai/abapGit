@@ -121,6 +121,8 @@ CLASS lcl_package_interface_facade IMPLEMENTATION.
   METHOD lif_package_interface_facade~save.
 
     mi_interface->save(
+      EXPORTING
+        i_suppress_dialog     = abap_true
       EXCEPTIONS
         short_text_missing    = 1
         object_not_changeable = 2
